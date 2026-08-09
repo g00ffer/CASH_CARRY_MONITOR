@@ -1,0 +1,42 @@
+# =====================================================================
+# Symbols for cash-and-carry monitoring / Stage 1
+# =====================================================================
+
+symbols:
+  - name: BTC_CARRY
+    enabled: true
+    exchange: binance
+
+    base: BTC
+    quote: USDT
+
+    spot_symbol: BTC/USDT
+    perp_symbol: BTC/USDT:USDT
+
+    direction: long_spot_short_perp
+
+    # For Stage 1 this is mostly informational.
+    # It can later be used for slippage/fee estimation by notional.
+    notional_usd: 10000
+
+    tags:
+      - major
+      - btc
+
+  - name: ETH_CARRY
+    enabled: true
+    exchange: binance
+
+    base: ETH
+    quote: USDT
+
+    spot_symbol: ETH/USDT
+    perp_symbol: ETH/USDT:USDT
+
+    direction: long_spot_short_perp
+
+    notional_usd: 10000
+
+    tags:
+      - major
+      - eth

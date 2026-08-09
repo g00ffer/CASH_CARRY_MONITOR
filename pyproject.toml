@@ -1,0 +1,17 @@
+[project]
+name = "cash-carry-monitor"
+version = "1.0.0"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "RUF"]
+# Оставляем смысловую группировку __all__ с комментариями в __init__.py
+per-file-ignores = { "src/monitor/**/__init__.py" = ["RUF022"] }
+
+[tool.ruff.lint.isort]
+known-first-party = ["monitor"]

@@ -1,0 +1,66 @@
+
+============================================================
+SYMBOL: BTC/USDT:USDT
+============================================================
+{
+  "info": {
+    "symbol": "BTCUSDT",
+    "markPrice": "64793.07026237",
+    "indexPrice": "64827.78478261",
+    "estimatedSettlePrice": "64821.96242027",
+    "lastFundingRate": "0.00006127",
+    "interestRate": "0.00010000",
+    "nextFundingTime": "1786291200000",
+    "time": "1786266498000"
+  },
+  "symbol": "BTC/USDT:USDT",
+  "markPrice": 64793.07026237,
+  "indexPrice": 64827.78478261,
+  "interestRate": 0.0001,
+  "estimatedSettlePrice": 64821.96242027,
+  "timestamp": 1786266498000,
+  "datetime": "2026-08-09T09:08:18.000Z",
+  "fundingRate": 6.127e-05,
+  "fundingTimestamp": 1786291200000,
+  "fundingDatetime": "2026-08-09T16:00:00.000Z",
+  "nextFundingRate": null,
+  "nextFundingTimestamp": null,
+  "nextFundingDatetime": null,
+  "previousFundingRate": null,
+  "previousFundingTimestamp": null,
+  "previousFundingDatetime": null,
+  "interval": null
+}
+
+============================================================
+SYMBOL: ETH/USDT:USDT
+============================================================
+{
+  "info": {
+    "symbol": "ETHUSDT",
+    "markPrice": "1915.11000000",
+    "indexPrice": "1916.03581395",
+    "estimatedSettlePrice": "1915.92618029",
+    "lastFundingRate": "0.00004220",
+    "interestRate": "0.00010000",
+    "nextFundingTime": "1786291200000",
+    "time": "1786266498000"
+  },
+  "symbol": "ETH/USDT:USDT",
+  "markPrice": 1915.11,
+  "indexPrice": 1916.03581395,
+  "interestRate": 0.0001,
+  "estimatedSettlePrice": 1915.92618029,
+  "timestamp": 1786266498000,
+  "datetime": "2026-08-09T09:08:18.000Z",
+  "fundingRate": 4.22e-05,
+  "fundingTimestamp": 1786291200000,
+  "fundingDatetime": "2026-08-09T16:00:00.000Z",
+  "nextFundingRate": null,
+  "nextFundingTimestamp": null,
+  "nextFundingDatetime": null,
+  "previousFundingRate": null,
+  "previousFundingTimestamp": null,
+  "previousFundingDatetime": null,
+  "interval": null
+}
