@@ -387,11 +387,6 @@ class MonitorApp:
         # --------------------------------------------------------------
         # Quality check
         # --------------------------------------------------------------
-
-        # Обновляем now_ms, чтобы учесть время, затраченное на сетевые запросы.
-        # Иначе из-за задержки сети и рассинхрона часов сервер биржи будет "в будущем".
-        now_ms = utc_now_ms()
-
         if fetch_errors:
             quality_report = quality_report_from_errors(
                 messages=fetch_errors,
@@ -406,7 +401,8 @@ class MonitorApp:
                 previous_market_snapshot=previous_market_snapshot,
             )
 
-        self._snapshot_repository.save_quality_report(
+        await asyncio.to_thread(
+            self._snapshot_repository.save_quality_report,
             cycle_id=cycle_id,
             symbol_name=instrument.name,
             quality_report=quality_report,
@@ -414,14 +410,18 @@ class MonitorApp:
 
         # --------------------------------------------------------------
         # Persist snapshots (always save to DB for audit trail)
+        # NOTE: _previous_market_snapshots is NOT updated here.
+        # It is updated only after quality gate passes, to prevent
+        # false PRICE_JUMP warnings on the next cycle. [C4 fix]
         # --------------------------------------------------------------
         if market_snapshot is not None:
-            self._snapshot_repository.save_market_snapshot(
+            await asyncio.to_thread(
+                self._snapshot_repository.save_market_snapshot,
                 market_snapshot,
             )
-
         if funding_snapshot is not None:
-            self._snapshot_repository.save_funding_snapshot(
+            await asyncio.to_thread(
+                self._snapshot_repository.save_funding_snapshot,
                 funding_snapshot,
             )
 
@@ -442,11 +442,11 @@ class MonitorApp:
             return
 
         # --------------------------------------------------------------
-        # Update previous snapshot reference ONLY after quality check passes.
-        # This prevents price_jump check from comparing against bad data.
+        # Update previous snapshot reference ONLY after quality check
+        # passes. This prevents price_jump check from comparing
+        # against bad data. [C4 fix]
         # --------------------------------------------------------------
-        if market_snapshot is not None:
-            self._previous_market_snapshots[instrument.name] = market_snapshot
+        self._previous_market_snapshots[instrument.name] = market_snapshot
 
         # --------------------------------------------------------------
         # Calculate metrics
