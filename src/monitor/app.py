@@ -668,7 +668,10 @@ class MonitorApp:
             metrics=None,
         )
 
-        self._snapshot_repository.save_signal_decision(decision)
+        await asyncio.to_thread(
+            self._snapshot_repository.save_signal_decision,
+            decision,
+        )
 
         new_state = update_alert_state(
             current=current_state,
