@@ -413,16 +413,11 @@ class MonitorApp:
         )
 
         # --------------------------------------------------------------
-        # Persist snapshots
+        # Persist snapshots (always save to DB for audit trail)
         # --------------------------------------------------------------
-
         if market_snapshot is not None:
             self._snapshot_repository.save_market_snapshot(
                 market_snapshot,
-            )
-
-            self._previous_market_snapshots[instrument.name] = (
-                market_snapshot
             )
 
         if funding_snapshot is not None:
@@ -433,7 +428,6 @@ class MonitorApp:
         # --------------------------------------------------------------
         # If data is invalid, do not calculate metrics/signals
         # --------------------------------------------------------------
-
         if (
             not quality_report.is_ok
             or market_snapshot is None
@@ -446,6 +440,13 @@ class MonitorApp:
                 quality_report=quality_report,
             )
             return
+
+        # --------------------------------------------------------------
+        # Update previous snapshot reference ONLY after quality check passes.
+        # This prevents price_jump check from comparing against bad data.
+        # --------------------------------------------------------------
+        if market_snapshot is not None:
+            self._previous_market_snapshots[instrument.name] = market_snapshot
 
         # --------------------------------------------------------------
         # Calculate metrics
