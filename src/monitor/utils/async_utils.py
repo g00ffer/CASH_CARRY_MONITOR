@@ -54,18 +54,23 @@ async def gather_dict(
 ) -> dict[str, Any]:
     """
     Gather named awaitables.
-
     Returns dict with same keys. Values may be results or exceptions.
-    """
 
+    CancelledError is always re-raised to ensure graceful shutdown
+    works correctly (Ctrl+C / SIGTERM must not be swallowed).
+    """
     keys = list(coros.keys())
     awaitables = [coros[key] for key in keys]
-
     results = await asyncio.gather(
         *awaitables,
         return_exceptions=True,
     )
-
+    # Propagate CancelledError immediately.
+    # Without this, graceful shutdown may not work correctly
+    # because CancelledError would be treated as a regular error.
+    for result in results:
+        if isinstance(result, asyncio.CancelledError):
+            raise result
     return dict(zip(keys, results))
 
 

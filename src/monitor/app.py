@@ -225,7 +225,7 @@ class MonitorApp:
                 self._logger.exception("polling cycle failed")
 
             await self._maybe_send_heartbeat()
-            self._maybe_cleanup()
+            await self._maybe_cleanup()
 
             delay_ms = next_tick_delay_ms(
                 interval_ms=self._settings.polling.market_interval_ms,
@@ -498,7 +498,8 @@ class MonitorApp:
             calculated_at_ms=calculated_at_ms,
         )
 
-        self._snapshot_repository.save_metrics(
+        await asyncio.to_thread(
+            self._snapshot_repository.save_metrics,
             cycle_id=cycle_id,
             symbol_name=instrument.name,
             basis_metrics=basis_metrics,
@@ -547,7 +548,10 @@ class MonitorApp:
             params=self._signal_params,
         )
 
-        self._snapshot_repository.save_signal_decision(decision)
+        await asyncio.to_thread(
+            self._snapshot_repository.save_signal_decision,
+            decision,
+        )
 
         log_event(
             self._logger,
@@ -732,7 +736,7 @@ class MonitorApp:
         )
 
         if result.status != AlertDeliveryStatus.SUPPRESSED:
-            self._save_notification_alert(
+            await self._save_notification_alert(
                 cycle_id=cycle_id,
                 symbol_name=instrument.name,
                 alert_type=AlertType.SIGNAL,
@@ -812,7 +816,7 @@ class MonitorApp:
         )
 
         if result.status != AlertDeliveryStatus.SUPPRESSED:
-            self._save_notification_alert(
+            await self._save_notification_alert(
                 cycle_id=cycle_id,
                 symbol_name=instrument.name,
                 alert_type=AlertType.WARNING,
@@ -902,7 +906,7 @@ class MonitorApp:
     # Persistence helpers
     # ------------------------------------------------------------------
 
-    def _save_notification_alert(
+    async def _save_notification_alert(
         self,
         *,
         cycle_id: str,
@@ -915,7 +919,6 @@ class MonitorApp:
         """
         Save notification attempt into alert repository.
         """
-
         alert_record = AlertRecord(
             alert_id=new_alert_id(),
             cycle_id=cycle_id,
@@ -927,14 +930,16 @@ class MonitorApp:
             message_payload=message,
             error_message=result.error_message,
         )
-
-        self._alert_repository.save_alert(alert_record)
+        await asyncio.to_thread(
+            self._alert_repository.save_alert,
+            alert_record,
+        )
 
     # ------------------------------------------------------------------
     # Maintenance
     # ------------------------------------------------------------------
 
-    def _maybe_cleanup(self) -> None:
+    async def _maybe_cleanup(self) -> None:
         """
         Periodically remove old SQLite records.
         """
@@ -949,7 +954,8 @@ class MonitorApp:
             return
 
         try:
-            self._database.cleanup_old_records(
+            await asyncio.to_thread(
+                self._database.cleanup_old_records,
                 retention_days=self._settings.storage.retention_days,
             )
 
