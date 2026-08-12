@@ -9,7 +9,7 @@ from monitor.config.loader import (
     _validate_runtime_secrets,
     load_settings,
 )
-from monitor.config.schema import Settings, TelegramSettings
+from monitor.config.schema import Settings, SymbolConfig, TelegramSettings
 
 VALID_SETTINGS = """
 meta:
