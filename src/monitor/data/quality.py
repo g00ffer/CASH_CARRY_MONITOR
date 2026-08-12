@@ -635,7 +635,6 @@ def quality_report_from_errors(
     """
     Create failed quality report from multiple error messages.
     """
-
     errors = tuple(
         _error(
             code=code,
@@ -643,9 +642,8 @@ def quality_report_from_errors(
         )
         for message in messages
     )
-
     return QualityReport(
-        is_ok=False,
+        is_ok=len(errors) == 0,  # <-- Убедись, что тут не захардкожено False
         checked_at_ms=int(checked_at_ms),
         errors=errors,
         warnings=(),

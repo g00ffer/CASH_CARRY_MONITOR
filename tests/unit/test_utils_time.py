@@ -52,12 +52,12 @@ class TestDatetimeToMs:
     def test_aware_datetime(self):
         dt_obj = dt.datetime(2024, 3, 9, 12, 0, 0, tzinfo=dt.timezone.utc)
         result = datetime_to_ms(dt_obj)
-        assert result == 1710000000000
+        assert result == 1709985600000  # <-- Исправлено с 1710000000000
 
     def test_naive_datetime_treated_as_utc(self):
         dt_obj = dt.datetime(2024, 3, 9, 12, 0, 0)
         result = datetime_to_ms(dt_obj)
-        assert result == 1710000000000
+        assert result == 1709985600000  # <-- Исправлено с 1710000000000
 
 
 class TestMsToIso:

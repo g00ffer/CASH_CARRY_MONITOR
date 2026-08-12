@@ -118,6 +118,8 @@ class TestLoadSettings:
     def test_telegram_enabled_missing_secrets_raises(self, config_files, monkeypatch):
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
         monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+        # Предотвращаем чтение реального .env файла
+        monkeypatch.setattr("monitor.config.loader.load_dotenv", lambda *args, **kwargs: None)
         settings_file, symbols_file = config_files
         with pytest.raises(ConfigError, match="environment variables are missing"):
             load_settings(settings_file, symbols_file)
@@ -143,9 +145,17 @@ class TestReadYamlFile:
 
 class TestValidateRuntimeSecrets:
     def test_telegram_disabled_skips(self):
+        # Создаём dummy-символ, чтобы список не был пустым
+        dummy_symbol = SymbolConfig(
+            name="BTC_CARRY",
+            base="BTC",
+            quote="USDT",
+            spot_symbol="BTC/USDT",
+            perp_symbol="BTC/USDT:USDT",
+        )
         settings = Settings(
             telegram=TelegramSettings(enabled=False),
-            symbols=[],
+            symbols=[dummy_symbol],  # ← Добавили символ
         )
         # Should not raise even without env vars
         _validate_runtime_secrets(settings)

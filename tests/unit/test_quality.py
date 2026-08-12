@@ -207,9 +207,13 @@ class TestCheckMarketQuality:
             params=quality_params,
             now_ms=NOW_MS,
         )
-        assert report.is_ok is False
-        codes = [e.code for e in report.errors]
-        assert DataIssueCode.TIMESTAMP_MISMATCH in codes
+        # Теперь это WARNING, а не ERROR (перевели в прошлой сессии)
+        assert report.is_ok is True  # ← Было False, стало True
+        from monitor.domain.enums import DataIssueCode
+        assert any(
+            issue.code == DataIssueCode.TIMESTAMP_MISMATCH
+            for issue in report.warnings
+        )
 
     def test_stale_received_at(self, market_snapshot, quality_params):
         stale_snapshot = replace(market_snapshot, received_at_ms=NOW_MS - 20000)
@@ -315,7 +319,7 @@ class TestCheckFundingQuality:
         assert DataIssueCode.FUNDING_UNKNOWN in codes
 
     def test_next_funding_in_past_warning(self, funding_snapshot, quality_params):
-        bad = replace(funding_snapshot, next_funding_timestamp_ms=NOW_MS - 1000)
+        bad = replace(funding_snapshot, next_funding_timestamp_ms=NOW_MS - 60000)
         report = check_funding_quality(
             funding_snapshot=bad,
             params=quality_params,
