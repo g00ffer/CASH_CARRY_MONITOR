@@ -1,0 +1,33 @@
+{
+  "symbol": "BTC/USDT:USDT",
+  "timestamp": 1710000000200,
+  "datetime": "2024-03-09T12:00:00.200Z",
+  "high": 65530.0,
+  "low": 64830.0,
+  "bid": 65030.0,
+  "bidVolume": 10.5,
+  "ask": 65032.0,
+  "askVolume": 8.2,
+  "vwap": 65130.0,
+  "open": 64930.0,
+  "close": 65031.0,
+  "last": 65031.0,
+  "previousClose": 64930.0,
+  "change": 101.0,
+  "percentage": 0.15,
+  "average": 64980.0,
+  "baseVolume": 98765.43,
+  "quoteVolume": 6432587654.0,
+  "markPrice": 65031.0,
+  "indexPrice": 65025.0,
+  "info": {
+    "symbol": "BTCUSDT",
+    "pair": "BTCUSDT",
+    "contractType": "PERPETUAL",
+    "markPrice": "65031.00000000",
+    "indexPrice": "65025.00000000",
+    "lastFundingRate": "0.00008000",
+    "nextFundingTime": 1710028800000,
+    "time": 1710000000200
+  }
+}
