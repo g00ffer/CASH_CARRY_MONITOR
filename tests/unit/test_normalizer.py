@@ -122,12 +122,12 @@ class TestParseTimestampValue:
     def test_iso_string_with_z(self):
         result = parse_timestamp_value("2024-03-09T12:00:00.000Z")
         assert result is not None
-        assert result == 1710000000000
+        assert result == 1709985600000
 
     def test_iso_string_with_offset(self):
         result = parse_timestamp_value("2024-03-09T12:00:00.000+00:00")
         assert result is not None
-        assert result == 1710000000000
+        assert result == 1709985600000
 
     def test_numeric_string(self):
         result = parse_timestamp_value("1710000000000")
@@ -154,7 +154,7 @@ class TestParseTimestampFromPayload:
     def test_from_datetime_field(self):
         payload = {"datetime": "2024-03-09T12:00:00.000Z"}
         result = parse_timestamp_from_payload(payload, received_at_ms=999)
-        assert result == 1710000000000
+        assert result == 1709985600000
 
     def test_from_info_closeTime(self):
         payload = {"info": {"closeTime": 1710000000000}}
