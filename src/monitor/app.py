@@ -1,3 +1,4 @@
+# src/monitor/app.py
 from __future__ import annotations
 
 import asyncio
@@ -25,13 +26,17 @@ from monitor.domain import (
     AlertDeliveryStatus,
     AlertRecord,
     AlertType,
+    BasisMetrics,
     CarryInstrument,
+    CostMetrics,
     ExpectedExitBasisMode,
+    FundingSnapshot,
     MarketSnapshot,
+    NetYieldMetrics,
+    QualityReport,
     SignalDecision,
     SignalState,
     YieldBase,
-    QualityReport,
 )
 from monitor.exchanges import ExchangeClient
 from monitor.notifications import (
@@ -63,19 +68,17 @@ from monitor.utils import (
     wait_for_stop,
 )
 
-# ---------------------------------------------------------------------
-# App-level params
-# ---------------------------------------------------------------------
 
+# ======================================================================
+# App-level params
+# ======================================================================
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CostParams:
     """
     Cost parameters prepared by bootstrap.
-
     All values are decimal fractions.
     """
-
     spot_fee: Decimal
     perp_fee: Decimal
     slippage_entry: Decimal
@@ -90,7 +93,6 @@ class YieldParams:
     """
     Yield model parameters prepared by bootstrap.
     """
-
     holding_hours: Decimal
     cost_amortization_hours: Decimal
     include_basis_convergence: bool
@@ -99,10 +101,9 @@ class YieldParams:
     yield_base: YieldBase
 
 
-# ---------------------------------------------------------------------
+# ======================================================================
 # Monitor application
-# ---------------------------------------------------------------------
-
+# ======================================================================
 
 class MonitorApp:
     """
@@ -140,36 +141,27 @@ class MonitorApp:
         self._database = database
         self._exchange_client = exchange_client
         self._notifier = notifier
-
         self._instruments = list(instruments)
         self._enabled_instruments = [
             instrument
             for instrument in self._instruments
             if instrument.enabled
         ]
-
         self._quality_params = quality_params
         self._signal_params = signal_params
         self._cost_params = cost_params
         self._yield_params = yield_params
-
         self._state_store = state_store
         self._snapshot_repository = snapshot_repository
         self._alert_repository = alert_repository
-
         self._logger = get_logger("monitor.app")
-
         self._stop_event = asyncio.Event()
-
         self._previous_market_snapshots: dict[str, MarketSnapshot] = {}
         self._last_quality_warning_ms: dict[str, int] = {}
-
         self._alerts_sent_count = 0
         self._last_error_message: str | None = None
-
         self._last_heartbeat_ms = 0
         self._last_cleanup_ms = 0
-
         # Local anti-spam cooldown for data quality warnings.
         self._quality_warning_cooldown_ms = 15 * 60 * 1000
 
@@ -180,10 +172,8 @@ class MonitorApp:
     def request_shutdown(self) -> None:
         """
         Request graceful shutdown.
-
         Usually called from signal handler.
         """
-
         self._logger.info("shutdown requested")
         self._stop_event.set()
 
@@ -191,7 +181,6 @@ class MonitorApp:
         """
         Close external clients and database.
         """
-
         await self._exchange_client.close()
         await self._notifier.close()
         self._database.close()
@@ -204,7 +193,6 @@ class MonitorApp:
         """
         Run monitoring loop until shutdown.
         """
-
         log_event(
             self._logger,
             event="app_started",
@@ -232,7 +220,6 @@ class MonitorApp:
                 interval_ms=self._settings.polling.market_interval_ms,
                 started_at_ms=cycle_started_ms,
             )
-
             await wait_for_stop(
                 stop_event=self._stop_event,
                 timeout_ms=delay_ms,
@@ -251,7 +238,6 @@ class MonitorApp:
         """
         Process one polling cycle for all enabled instruments.
         """
-
         log_event(
             self._logger,
             event="cycle_started",
@@ -272,7 +258,6 @@ class MonitorApp:
                 )
             except Exception as exc:
                 self._last_error_message = str(exc)
-
                 log_event(
                     self._logger,
                     event="symbol_processing_failed",
@@ -303,7 +288,6 @@ class MonitorApp:
     ) -> None:
         """
         Process one symbol:
-
         1. fetch market/funding
         2. quality check
         3. persist snapshots
@@ -312,9 +296,7 @@ class MonitorApp:
         6. update state
         7. send alert if needed
         """
-
         now_ms = utc_now_ms()
-
         previous_market_snapshot = self._previous_market_snapshots.get(
             instrument.name,
         )
@@ -326,7 +308,6 @@ class MonitorApp:
         # --------------------------------------------------------------
         # Fetch market snapshot
         # --------------------------------------------------------------
-
         try:
             market_snapshot = await fetch_market_snapshot(
                 client=self._exchange_client,
@@ -338,7 +319,6 @@ class MonitorApp:
             message = f"market fetch failed: {exc}"
             fetch_errors.append(message)
             self._last_error_message = message
-
             log_event(
                 self._logger,
                 event="market_fetch_failed",
@@ -353,7 +333,6 @@ class MonitorApp:
         # --------------------------------------------------------------
         # Fetch funding snapshot
         # --------------------------------------------------------------
-
         try:
             funding_snapshot = await fetch_funding_snapshot(
                 client=self._exchange_client,
@@ -373,7 +352,6 @@ class MonitorApp:
             message = f"funding fetch failed: {exc}"
             fetch_errors.append(message)
             self._last_error_message = message
-
             log_event(
                 self._logger,
                 event="funding_fetch_failed",
@@ -388,6 +366,12 @@ class MonitorApp:
         # --------------------------------------------------------------
         # Quality check
         # --------------------------------------------------------------
+        # [C1 fix] Обновляем now_ms, чтобы учесть время, затраченное
+        # на сетевые запросы. Иначе received_at_ms (после запросов)
+        # может оказаться больше now_ms (до запросов), и quality check
+        # подумает, что данные "из будущего".
+        now_ms = utc_now_ms()
+
         if fetch_errors:
             quality_report = quality_report_from_errors(
                 messages=fetch_errors,
@@ -452,7 +436,6 @@ class MonitorApp:
         # --------------------------------------------------------------
         # Calculate metrics
         # --------------------------------------------------------------
-
         calculated_at_ms = utc_now_ms()
 
         basis_metrics = calc_basis_metrics(
@@ -527,7 +510,6 @@ class MonitorApp:
         # --------------------------------------------------------------
         # Evaluate signal
         # --------------------------------------------------------------
-
         evaluation_input = SignalEvaluationInput(
             cycle_id=cycle_id,
             symbol_name=instrument.name,
@@ -542,7 +524,6 @@ class MonitorApp:
         )
 
         current_state = self._state_store.get(instrument.name)
-
         decision = evaluate_signal(
             evaluation_input=evaluation_input,
             current_state=current_state,
@@ -571,7 +552,6 @@ class MonitorApp:
         # --------------------------------------------------------------
         # Send alert if needed
         # --------------------------------------------------------------
-
         state_decision = decision
 
         if decision.should_alert:
@@ -611,13 +591,11 @@ class MonitorApp:
         # --------------------------------------------------------------
         # Update alert state
         # --------------------------------------------------------------
-
         new_state = update_alert_state(
             current=current_state,
             decision=state_decision,
             now_ms=utc_now_ms(),
         )
-
         self._state_store.upsert(new_state)
 
     # ------------------------------------------------------------------
@@ -634,18 +612,15 @@ class MonitorApp:
     ) -> None:
         """
         Handle invalid/missing data.
-
         Signal engine is not called.
         State is reset to DATA_INVALID.
         """
-
         reasons = tuple(
             issue.message
             for issue in quality_report.errors
         )
 
         current_state = self._state_store.get(instrument.name)
-
         cooldown_remaining_sec = calc_cooldown_remaining_sec(
             last_alert_ts_ms=(
                 current_state.last_alert_ts_ms
@@ -679,7 +654,6 @@ class MonitorApp:
             decision=decision,
             now_ms=now_ms,
         )
-
         self._state_store.upsert(new_state)
 
         log_event(
@@ -710,18 +684,17 @@ class MonitorApp:
         instrument: CarryInstrument,
         cycle_id: str,
         decision: SignalDecision,
-        market_snapshot,
-        funding_snapshot,
-        basis_metrics,
-        cost_metrics,
-        net_yield_metrics,
-        quality_report,
+        market_snapshot: MarketSnapshot,
+        funding_snapshot: FundingSnapshot,
+        basis_metrics: BasisMetrics,
+        cost_metrics: CostMetrics,
+        net_yield_metrics: NetYieldMetrics,
+        quality_report: QualityReport,
         now_ms: int,
     ) -> NotificationResult:
         """
         Send trading signal to Telegram.
         """
-
         message = format_signal_message(
             symbol_name=instrument.name,
             decision=decision,
@@ -751,7 +724,6 @@ class MonitorApp:
 
         if result.delivered:
             self._alerts_sent_count += 1
-
             log_event(
                 self._logger,
                 event="signal_alert_sent",
@@ -761,7 +733,6 @@ class MonitorApp:
         else:
             if result.error_message:
                 self._last_error_message = result.error_message
-
             log_event(
                 self._logger,
                 event="signal_alert_not_delivered",
@@ -783,12 +754,11 @@ class MonitorApp:
         instrument: CarryInstrument,
         cycle_id: str,
         now_ms: int,
-        quality_report: QualityReport,  # ← ДОБАВЛЕНО
+        quality_report: QualityReport,
     ) -> None:
         """
         Send data quality warning if enabled and local cooldown passed.
         """
-
         if not self._settings.telegram.send_data_errors:
             return
 
@@ -796,7 +766,6 @@ class MonitorApp:
             instrument.name,
             0,
         )
-
         if now_ms - last_warning_ms < self._quality_warning_cooldown_ms:
             return
 
@@ -838,7 +807,6 @@ class MonitorApp:
         else:
             if result.error_message:
                 self._last_error_message = result.error_message
-
             log_event(
                 self._logger,
                 event="quality_warning_not_delivered",
@@ -855,12 +823,10 @@ class MonitorApp:
         """
         Send heartbeat if heartbeat interval elapsed.
         """
-
         if not self._settings.telegram.send_heartbeat:
             return
 
         now_ms = utc_now_ms()
-
         if (
             self._last_heartbeat_ms > 0
             and now_ms - self._last_heartbeat_ms
@@ -894,7 +860,6 @@ class MonitorApp:
         else:
             if result.error_message:
                 self._last_error_message = result.error_message
-
             log_event(
                 self._logger,
                 event="heartbeat_not_delivered",
@@ -934,6 +899,7 @@ class MonitorApp:
             message_payload=message,
             error_message=result.error_message,
         )
+
         await asyncio.to_thread(
             self._alert_repository.save_alert,
             alert_record,
@@ -947,7 +913,6 @@ class MonitorApp:
         """
         Periodically remove old SQLite records.
         """
-
         now_ms = utc_now_ms()
         cleanup_interval_ms = 24 * 60 * 60 * 1000
 
@@ -962,9 +927,7 @@ class MonitorApp:
                 self._database.cleanup_old_records,
                 retention_days=self._settings.storage.retention_days,
             )
-
             self._last_cleanup_ms = now_ms
-
             log_event(
                 self._logger,
                 event="database_cleanup_done",
