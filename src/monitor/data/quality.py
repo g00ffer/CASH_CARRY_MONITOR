@@ -455,7 +455,14 @@ def check_funding_quality(
             )
         )
     else:
-        if funding_snapshot.next_funding_timestamp_ms <= int(now_ms):
+        # Allow 10 seconds tolerance after funding settlement.
+        # Binance may not update nextFundingTime immediately.
+        funding_settlement_tolerance_ms = 10_000
+        if (
+            funding_snapshot.next_funding_timestamp_ms is not None
+            and funding_snapshot.next_funding_timestamp_ms
+            <= int(now_ms) - funding_settlement_tolerance_ms
+        ):
             warnings.append(
                 _warning(
                     code=DataIssueCode.FUNDING_TIMESTAMP_INVALID,

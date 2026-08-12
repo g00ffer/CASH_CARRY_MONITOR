@@ -176,14 +176,11 @@ async def run_periodic(
 ) -> None:
     """
     Run async task periodically with fixed interval.
-
-    If task execution takes longer than interval, next execution starts
-    immediately after previous execution finishes.
-
-    If catch_exceptions is False, first task exception stops the loop.
-
-    If catch_exceptions is True, task exceptions are suppressed and optionally
-    passed to on_error.
+    
+    .. note::
+        Not used in Stage 1. The main loop in app.py is written manually
+        for finer control over cycle timing and error handling.
+        Kept for potential Stage 2 use cases.
     """
 
     if interval_ms <= 0:

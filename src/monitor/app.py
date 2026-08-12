@@ -31,6 +31,7 @@ from monitor.domain import (
     SignalDecision,
     SignalState,
     YieldBase,
+    QualityReport,
 )
 from monitor.exchanges import ExchangeClient
 from monitor.notifications import (
@@ -629,7 +630,7 @@ class MonitorApp:
         instrument: CarryInstrument,
         cycle_id: str,
         now_ms: int,
-        quality_report,
+        quality_report: QualityReport,
     ) -> None:
         """
         Handle invalid/missing data.
@@ -782,7 +783,7 @@ class MonitorApp:
         instrument: CarryInstrument,
         cycle_id: str,
         now_ms: int,
-        quality_report,
+        quality_report: QualityReport,  # ← ДОБАВЛЕНО
     ) -> None:
         """
         Send data quality warning if enabled and local cooldown passed.

@@ -133,6 +133,9 @@ class AlertRepository:
 
         return row.get("last_sent_ms")
 
+    # TODO: Stage 2 — these methods are not used in Stage 1 app.py.
+    # They are kept for future heartbeat stats and duplicate protection.
+    
     def was_recent_alert(
         self,
         *,

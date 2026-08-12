@@ -87,8 +87,15 @@ def update_alert_state(
         )
 
     last_alert_ts_ms = current.last_alert_ts_ms
-
+    # Update last_alert_ts_ms on successful delivery OR on suppression.
+    # Suppression (e.g. rate limiter) should still start cooldown to avoid
+    # retry flooding on the next cycle.
     if decision.should_alert:
+        last_alert_ts_ms = now_ms
+    elif (
+        decision.state == SignalState.COOLDOWN
+        and "notification_suppressed" in decision.reasons
+    ):
         last_alert_ts_ms = now_ms
 
     active_states = (

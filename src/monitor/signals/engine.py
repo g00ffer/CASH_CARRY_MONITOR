@@ -333,10 +333,17 @@ def evaluate_signal(
         reasons.append("funding_rate_below_threshold")
 
     # ------------------------------------------------------------------
-    # 7. Net horizon yield
+    # 7. Net horizon yield (with hysteresis)
     # ------------------------------------------------------------------
-
-    if evaluation_input.net_yield_metrics.net_horizon >= params.min_net_horizon:
+    effective_net_horizon_threshold = hysteresis_threshold(
+        base_threshold=params.min_net_horizon,
+        hysteresis=params.hysteresis,
+        is_active=was_active,
+    )
+    if (
+        evaluation_input.net_yield_metrics.net_horizon
+        >= effective_net_horizon_threshold
+    ):
         passed_checks.append("net_horizon_ok")
     else:
         reasons.append("net_horizon_below_threshold")

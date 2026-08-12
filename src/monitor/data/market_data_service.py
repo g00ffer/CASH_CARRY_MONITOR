@@ -56,16 +56,6 @@ async def fetch_market_snapshot(
     spot = results["spot"]
     perp = results["perp"]
 
-    if isinstance(spot, BaseException):
-        raise ExchangeRequestError(
-            f"failed to fetch spot ticker for {instrument.name}: {spot}",
-        )
-
-    if isinstance(perp, BaseException):
-        raise ExchangeRequestError(
-            f"failed to fetch perp ticker for {instrument.name}: {perp}",
-        )
-
     if spot.symbol != instrument.spot_symbol:
         raise ExchangeDataError(
             f"unexpected spot symbol returned for {instrument.name}: "
