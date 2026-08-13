@@ -211,13 +211,15 @@ def print_summary(metrics, decisions, quality, funding, alerts):
         for alert_type in sorted(alerts['alert_type'].unique()):
             type_alerts = alerts[alerts['alert_type'] == alert_type]
             statuses = type_alerts['delivery_status'].str.lower()
-            delivered = int((statuses == 'delivered').sum())
+            delivered = int((statuses == 'sent').sum())       # ← было 'delivered'
             failed = int((statuses == 'failed').sum())
             suppressed = int((statuses == 'suppressed').sum())
+            pending = int((statuses == 'pending').sum())
             print(f"    {alert_type}: {len(type_alerts)} "
                   f"(доставлено: {delivered}, "
                   f"недоставлено: {failed}, "
-                  f"подавлено: {suppressed})")
+                  f"подавлено: {suppressed}, "
+                  f"ожидает: {pending})")
     else:
         print(f"\n📬 Алерты: нет")
 
