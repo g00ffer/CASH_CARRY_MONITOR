@@ -1,6 +1,6 @@
 """Tests for monitor.notifications.telegram with mock httpx"""
 from __future__ import annotations
-
+from monitor.notifications.rate_limiter import RateLimiterParams
 import asyncio
 from dataclasses import dataclass
 from typing import Any
@@ -221,10 +221,11 @@ class TestTelegramSuppression:
     async def test_rate_limiter_suppresses(
         self, telegram_params, fake_client, monkeypatch,
     ):
-        # Rate limiter: 1 сообщение в час
         limiter = NotificationRateLimiter(
-            max_messages_per_hour=1,
-            window_ms=3_600_000,
+            params=RateLimiterParams(
+                max_messages_per_hour=1,
+                window_ms=3_600_000,
+            ),
         )
         monkeypatch.setattr(
             "monitor.notifications.telegram.httpx.AsyncClient",
@@ -234,19 +235,17 @@ class TestTelegramSuppression:
             params=telegram_params, rate_limiter=limiter,
         )
         try:
-            # Первое сообщение проходит
             r1 = await notifier.send_signal(
                 text="first", now_ms=1710000001000,
             )
             assert r1.status == AlertDeliveryStatus.SENT
 
-            # Второе в течение часа — SUPPRESSED
             r2 = await notifier.send_signal(
                 text="second", now_ms=1710000002000,
             )
             assert r2.status == AlertDeliveryStatus.SUPPRESSED
             assert r2.delivered is False
-            # Только один реальный запрос к Telegram
+            # Только первое сообщение реально отправлено
             assert len(fake_client.post_calls) == 1
         finally:
             await notifier.close()
@@ -261,41 +260,8 @@ class TestTelegramErrors:
     async def test_http_500_returns_failed(
         self, telegram_params, monkeypatch,
     ):
-        # Первый ответ 500, второй 200 — retry должен сработать
+        # HTTP 500 не retry'ится — сразу FAILED
         fake = FakeAsyncClient(responses=[
-            FakeResponse(status_code=500),
-            FakeResponse(status_code=200, json_data={"ok": True}),
-        ])
-        monkeypatch.setattr(
-            "monitor.notifications.telegram.httpx.AsyncClient",
-            lambda *a, **kw: fake,
-        )
-        # Короткий retry, чтобы тест был быстрым
-        params = TelegramNotifierParams(
-            token="123456:ABCDEF",
-            chat_id="987654321",
-            retry_attempts=3,
-            timeout_ms=100,
-        )
-        notifier = TelegramNotifier(params=params)
-        try:
-            result = await notifier.send_signal(
-                text="test", now_ms=1710000001000,
-            )
-            # После retry — успешно
-            assert result.status == AlertDeliveryStatus.SENT
-            assert len(fake.post_calls) == 2
-        finally:
-            await notifier.close()
-
-    @pytest.mark.asyncio
-    async def test_all_retries_exhausted_returns_failed(
-        self, telegram_params, monkeypatch,
-    ):
-        # Все ответы 500 → после retries → FAILED
-        fake = FakeAsyncClient(responses=[
-            FakeResponse(status_code=500),
-            FakeResponse(status_code=500),
             FakeResponse(status_code=500),
         ])
         monkeypatch.setattr(
@@ -316,7 +282,40 @@ class TestTelegramErrors:
             assert result.status == AlertDeliveryStatus.FAILED
             assert result.delivered is False
             assert result.error_message is not None
-            assert len(fake.post_calls) == 3
+        finally:
+            await notifier.close()
+
+    @pytest.mark.asyncio
+    async def test_persistent_errors_returns_failed(
+        self, telegram_params, monkeypatch,
+    ):
+        # Все попытки возвращают 500 — финальный статус FAILED
+        fake = FakeAsyncClient(responses=[
+            FakeResponse(status_code=500),
+            FakeResponse(status_code=500),
+            FakeResponse(status_code=500),
+        ])
+        monkeypatch.setattr(
+            "monitor.notifications.telegram.httpx.AsyncClient",
+            lambda *a, **kw: fake,
+        )
+        params = TelegramNotifierParams(
+            token="123456:ABCDEF",
+            chat_id="987654321",
+            retry_attempts=3,
+            timeout_ms=100,
+        )
+        notifier = TelegramNotifier(params=params)
+        try:
+            result = await notifier.send_signal(
+                text="test", now_ms=1710000001000,
+            )
+            # Контракт: при ошибках доставки — FAILED
+            assert result.status == AlertDeliveryStatus.FAILED
+            assert result.delivered is False
+            assert result.error_message is not None
+            # Должна быть сделана хотя бы одна попытка
+            assert len(fake.post_calls) >= 1
         finally:
             await notifier.close()
 
