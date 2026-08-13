@@ -201,20 +201,24 @@ class TestAlertRepository:
         alert_repository.save_alert(record)
         assert _count(db_path, "alerts") == 1
 
+    def test_cleanup_keeps_fresh_alerts(
+        self, database, alert_repository, db_path,
+    ):
+        alert_repository.save_alert(self._make_record())
+        database.cleanup_old_records(retention_days=90)
+        assert _count(db_path, "alerts") == 1
+
     def test_cleanup_removes_old_alerts(
         self, database, alert_repository, db_path,
     ):
-        old_record = AlertRecord(
-            alert_id=new_alert_id(),
-            cycle_id="old-cycle",
-            symbol_name="BTC_CARRY",
-            alert_type=AlertType.SIGNAL,
-            delivery_status=AlertDeliveryStatus.SENT,
-            created_at_ms=1,  # epoch — очень старая запись
-            sent_at_ms=1,
-            message_payload="old",
-            error_message=None,
+        alert_repository.save_alert(self._make_record())
+        # Ретейншен считается от inserted_at_ms (время записи в БД),
+        # поэтому откатываем ОБА timestamp напрямую в SQLite.
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "UPDATE alerts SET created_at_ms = 1, inserted_at_ms = 1",
         )
-        alert_repository.save_alert(old_record)
+        conn.commit()
+        conn.close()
         database.cleanup_old_records(retention_days=90)
         assert _count(db_path, "alerts") == 0
