@@ -312,39 +312,44 @@ def analyze_hourly_patterns(metrics):
 # Plots
 # ======================================================================
 def plot_metrics(metrics):
-    fig, axes = plt.subplots(3, 1, figsize=(16, 12))
-    fig.suptitle('Cash-Carry Monitor: Metrics Over Time', fontsize=16, fontweight='bold')
+    """Plot key metrics over time with optimized performance."""
+    plt.style.use('seaborn-v0_8-darkgrid')  # faster than default
+    
+    fig, axes = plt.subplots(3, 1, figsize=(14, 10))
+    fig.suptitle('Cash-Carry Monitor: Metrics Over Time', fontsize=14, fontweight='bold')
 
     symbols = sorted(metrics['symbol_name'].unique())
     colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D']
 
-    # 1. Funding Annual
+    # 1. Funding Annual — downsample to 30min (204 points for 102h)
     ax = axes[0]
     for i, symbol in enumerate(symbols):
         data = metrics[metrics['symbol_name'] == symbol]
         data_subset = data[['timestamp', 'funding_annual']].copy()
-        data_ds = data_subset.set_index('timestamp').resample('5min').mean()
+        data_ds = data_subset.set_index('timestamp').resample('30min').mean()
         ax.plot(data_ds.index, data_ds['funding_annual'] * 100,
-                label=symbol, color=colors[i % len(colors)], alpha=0.8, linewidth=1)
-    ax.set_ylabel('Funding Annual (%)')
-    ax.set_title('Funding Rate (Annual)')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    ax.axhline(y=8, color='r', linestyle='--', alpha=0.5, label='Min threshold (8%)')
+                label=symbol, color=colors[i % len(colors)], 
+                alpha=0.8, linewidth=1.2)
+    ax.set_ylabel('Funding Annual (%)', fontsize=11)
+    ax.set_title('Funding Rate (Annual)', fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.2)
+    ax.axhline(y=7, color='r', linestyle='--', alpha=0.5, label='Threshold (7%)')
 
     # 2. Net Annual
     ax = axes[1]
     for i, symbol in enumerate(symbols):
         data = metrics[metrics['symbol_name'] == symbol]
         data_subset = data[['timestamp', 'net_annual']].copy()
-        data_ds = data_subset.set_index('timestamp').resample('5min').mean()
+        data_ds = data_subset.set_index('timestamp').resample('30min').mean()
         ax.plot(data_ds.index, data_ds['net_annual'] * 100,
-                label=symbol, color=colors[i % len(colors)], alpha=0.8, linewidth=1)
-    ax.set_ylabel('Net Annual (%)')
-    ax.set_title('Net Yield (Annual)')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    ax.axhline(y=8, color='r', linestyle='--', alpha=0.5, label='Min threshold (8%)')
+                label=symbol, color=colors[i % len(colors)], 
+                alpha=0.8, linewidth=1.2)
+    ax.set_ylabel('Net Annual (%)', fontsize=11)
+    ax.set_title('Net Yield (Annual)', fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.2)
+    ax.axhline(y=7, color='r', linestyle='--', alpha=0.5, label='Threshold (7%)')
     ax.axhline(y=0, color='k', linestyle='-', alpha=0.3)
 
     # 3. Net Horizon
@@ -352,82 +357,94 @@ def plot_metrics(metrics):
     for i, symbol in enumerate(symbols):
         data = metrics[metrics['symbol_name'] == symbol]
         data_subset = data[['timestamp', 'net_horizon']].copy()
-        data_ds = data_subset.set_index('timestamp').resample('5min').mean()
+        data_ds = data_subset.set_index('timestamp').resample('30min').mean()
         ax.plot(data_ds.index, data_ds['net_horizon'] * 100,
-                label=symbol, color=colors[i % len(colors)], alpha=0.8, linewidth=1)
-    ax.set_ylabel('Net Horizon (%)')
-    ax.set_xlabel('Time (UTC)')
-    ax.set_title('Net Yield (Per Holding Period)')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    ax.axhline(y=0.1, color='r', linestyle='--', alpha=0.5, label='Min threshold (0.1%)')
+                label=symbol, color=colors[i % len(colors)], 
+                alpha=0.8, linewidth=1.2)
+    ax.set_ylabel('Net Horizon (%)', fontsize=11)
+    ax.set_xlabel('Time (UTC)', fontsize=11)
+    ax.set_title('Net Yield (Per Holding Period)', fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.2)
+    ax.axhline(y=0.1, color='r', linestyle='--', alpha=0.5, label='Threshold (0.1%)')
     ax.axhline(y=0, color='k', linestyle='-', alpha=0.3)
 
     for ax in axes:
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right', fontsize=9)
 
     plt.tight_layout()
-    plt.savefig(METRICS_PNG, dpi=150, bbox_inches='tight')
+    plt.savefig(METRICS_PNG, dpi=100, pad_inches=0.1)  # faster: dpi=100, no tight
     plt.close(fig)
     print(f"\n📈 График сохранён: {METRICS_PNG}")
 
 
 def plot_distribution(metrics):
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle('Distribution of Key Metrics', fontsize=16, fontweight='bold')
+    """Plot distribution of key metrics with optimized performance."""
+    plt.style.use('seaborn-v0_8-darkgrid')
+    
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9))
+    fig.suptitle('Distribution of Key Metrics', fontsize=14, fontweight='bold')
 
     symbols = sorted(metrics['symbol_name'].unique())
     colors = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D']
 
+    # Funding Annual histogram — 30 bins instead of 50
     ax = axes[0, 0]
     for i, symbol in enumerate(symbols):
         data = metrics[metrics['symbol_name'] == symbol]['funding_annual'] * 100
-        ax.hist(data, bins=50, alpha=0.6, label=symbol, color=colors[i % len(colors)])
-    ax.axvline(x=8, color='r', linestyle='--', alpha=0.7, label='Threshold (8%)')
-    ax.set_xlabel('Funding Annual (%)')
-    ax.set_ylabel('Count')
-    ax.set_title('Funding Rate Distribution')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+        ax.hist(data, bins=30, alpha=0.6, label=symbol, 
+                color=colors[i % len(colors)], edgecolor='none')
+    ax.axvline(x=7, color='r', linestyle='--', alpha=0.7, label='Threshold (7%)')
+    ax.set_xlabel('Funding Annual (%)', fontsize=10)
+    ax.set_ylabel('Count', fontsize=10)
+    ax.set_title('Funding Rate Distribution', fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.2)
 
+    # Net Annual histogram
     ax = axes[0, 1]
     for i, symbol in enumerate(symbols):
         data = metrics[metrics['symbol_name'] == symbol]['net_annual'] * 100
-        ax.hist(data, bins=50, alpha=0.6, label=symbol, color=colors[i % len(colors)])
-    ax.axvline(x=8, color='r', linestyle='--', alpha=0.7, label='Threshold (8%)')
+        ax.hist(data, bins=30, alpha=0.6, label=symbol, 
+                color=colors[i % len(colors)], edgecolor='none')
+    ax.axvline(x=7, color='r', linestyle='--', alpha=0.7, label='Threshold (7%)')
     ax.axvline(x=0, color='k', linestyle='-', alpha=0.5)
-    ax.set_xlabel('Net Annual (%)')
-    ax.set_ylabel('Count')
-    ax.set_title('Net Yield Distribution')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.set_xlabel('Net Annual (%)', fontsize=10)
+    ax.set_ylabel('Count', fontsize=10)
+    ax.set_title('Net Yield Distribution', fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.2)
 
+    # Net Horizon histogram
     ax = axes[1, 0]
     for i, symbol in enumerate(symbols):
         data = metrics[metrics['symbol_name'] == symbol]['net_horizon'] * 100
-        ax.hist(data, bins=50, alpha=0.6, label=symbol, color=colors[i % len(colors)])
+        ax.hist(data, bins=30, alpha=0.6, label=symbol, 
+                color=colors[i % len(colors)], edgecolor='none')
     ax.axvline(x=0.1, color='r', linestyle='--', alpha=0.7, label='Threshold (0.1%)')
     ax.axvline(x=0, color='k', linestyle='-', alpha=0.5)
-    ax.set_xlabel('Net Horizon (%)')
-    ax.set_ylabel('Count')
-    ax.set_title('Net Horizon Distribution')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.set_xlabel('Net Horizon (%)', fontsize=10)
+    ax.set_ylabel('Count', fontsize=10)
+    ax.set_title('Net Horizon Distribution', fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.2)
 
+    # Basis Entry histogram
     ax = axes[1, 1]
     for i, symbol in enumerate(symbols):
         data = metrics[metrics['symbol_name'] == symbol]['basis_entry'] * 100
-        ax.hist(data, bins=50, alpha=0.6, label=symbol, color=colors[i % len(colors)])
+        ax.hist(data, bins=30, alpha=0.6, label=symbol, 
+                color=colors[i % len(colors)], edgecolor='none')
     ax.axvline(x=0, color='k', linestyle='-', alpha=0.5)
-    ax.set_xlabel('Basis Entry (%)')
-    ax.set_ylabel('Count')
-    ax.set_title('Basis Entry Distribution')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    ax.set_xlabel('Basis Entry (%)', fontsize=10)
+    ax.set_ylabel('Count', fontsize=10)
+    ax.set_title('Basis Entry Distribution', fontsize=11)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.2)
 
     plt.tight_layout()
-    plt.savefig(DISTRIBUTION_PNG, dpi=150, bbox_inches='tight')
+    plt.savefig(DISTRIBUTION_PNG, dpi=100, pad_inches=0.1)  # faster
     plt.close(fig)
     print(f"📊 Гистограммы сохранены: {DISTRIBUTION_PNG}")
 
