@@ -1,14 +1,11 @@
 # =====================================================================
-# Cash-and-carry monitor / Stage 1
-# Monitoring + Telegram signals only
-# No trading, no order execution
+# Cash-and-carry monitor / Stage 1 (optimized)
 # =====================================================================
 
 meta:
-  config_version: "1.0.0"
+  config_version: "1.1.0"
   environment: dev
-  calculation_version: "stage1-conservative-v1"
-
+  calculation_version: "stage1-maker-v1"
 
 # ---------------------------------------------------------------------
 # Exchange
@@ -16,137 +13,69 @@ meta:
 exchange:
   id: binance
   sandbox: false
-
-  # HTTP timeout for Binance REST requests
   timeout_ms: 5000
-
-  # Number of retries for retryable network/API errors
   retries: 3
-
-  # Initial backoff before retry
   retry_backoff_ms: 500
-
-  # Respect exchange rate limits
   rate_limit: true
-
-  # Optional protective limit, not strictly required for MVP
   max_weight_per_minute: 1200
-
 
 # ---------------------------------------------------------------------
 # Polling
 # ---------------------------------------------------------------------
 polling:
-  # How often to poll spot/perp market data
   market_interval_ms: 10000
-
-  # How often to refresh funding metadata
   funding_interval_ms: 60000
-
-  # Heartbeat interval for service liveness notifications/logs
   heartbeat_interval_ms: 3600000
-
 
 # ---------------------------------------------------------------------
 # Data quality
 # ---------------------------------------------------------------------
 quality:
-  # Snapshot is considered stale if older than this
   max_snapshot_age_ms: 15000
-
-  # Maximum allowed time difference between spot and perp snapshots
   max_spot_perp_time_diff_ms: 5000
-
-  # Maximum allowed spread for signal consideration
   max_spread_bps: 10.0
-
-  # Minimum 24h quote volume, optional liquidity filter
   min_quote_volume_24h: 1000000
-
-  # Funding interval must be known and valid
   require_valid_funding_interval: true
-
-  # If true, signal is blocked when predicted/current funding is unavailable.
-  # For Stage 1 you may set false if Binance endpoint does not always expose it.
   require_predicted_funding: false
-
-  # Optional sanity check against abnormal one-tick price jumps
   max_price_jump_pct: 5.0
 
-
 # ---------------------------------------------------------------------
-# Trading fees
-# Values are in percent.
-# Example: 0.10 means 0.10% = 0.001 decimal
+# Trading fees (MAKER MODE)
 # ---------------------------------------------------------------------
 fees:
-  execution_mode: taker
-
+  execution_mode: maker
   spot_taker_fee_pct: 0.10
   spot_maker_fee_pct: 0.075
-
   perp_taker_fee_pct: 0.05
   perp_maker_fee_pct: 0.02
-
-  # If BNB discount is applied, fee values above should already reflect it.
   bnb_discount: false
-
 
 # ---------------------------------------------------------------------
 # Slippage and spread buffers
-# Values are in basis points.
-# Example: 2 means 2 bp = 0.02% = 0.0002 decimal
 # ---------------------------------------------------------------------
 costs:
   slippage_entry_bps: 2.0
   slippage_exit_bps: 2.0
   spread_buffer_bps: 2.0
 
-
 # ---------------------------------------------------------------------
-# Yield model
+# Yield model (30-day horizon)
 # ---------------------------------------------------------------------
 yield_model:
-  # Planned holding horizon used for funding horizon yield
   holding_hours: 720
-
-  # Horizon used to amortize one-time entry/exit costs.
-  # For conservative Stage 1 keep it equal to holding_hours.
   cost_amortization_hours: 720
-
-  # Do not allow artificial annualization over very short horizons
   min_cost_amortization_hours: 24
-
-  # For Stage 1 use conservative funding-only model.
   include_basis_convergence: false
-
-  # Must be 0 if include_basis_convergence is false
   basis_haircut: 0.0
-
-  # entry | zero | historical_median
   expected_exit_basis_mode: entry
-
-  # Prefer predicted/current funding rate over last settled funding rate
   use_predicted_funding: true
-
-  # Fallback if exchange does not provide funding interval explicitly
   default_funding_interval_hours: 8
-
-  # Annual borrow cost in percent, if margin borrow is used.
-  # For own USDT capital can be 0.
   borrow_rate_annual_pct: 0.0
-
-  # Optional opportunity cost of own USDT capital, in percent annual.
   opportunity_cost_annual_pct: 0.0
-
-  # Stage 1: yield on notional is simpler and more stable.
-  # equity yield can be added later.
   yield_base: notional
-
 
 # ---------------------------------------------------------------------
 # Margin / equity information
-# Not used for core Stage 1 signal, but useful for future risk metrics.
 # ---------------------------------------------------------------------
 margin:
   perp_initial_margin_fraction: 0.10
@@ -154,67 +83,34 @@ margin:
   spot_collateral_haircut: 0.0
   use_portfolio_margin: false
 
-
 # ---------------------------------------------------------------------
-# Signal thresholds
+# Signal thresholds (optimized for maker/H720)
 # ---------------------------------------------------------------------
 signals:
-  # Main annualized net yield threshold, in percent
-  min_net_annual_pct: 8.0
-
-  # Minimum absolute net yield over holding horizon, in percent.
-  # Protects against signals where annualized yield looks good,
-  # but absolute profit after costs is tiny.
+  min_net_annual_pct: 7.0
   min_net_horizon_pct: 0.10
-
-  # Minimum funding rate per funding interval, in percent.
-  # Example: 0.005 means 0.005% = 0.00005 decimal.
   min_funding_rate_pct_per_interval: 0.005
-
-  # Require positive funding for long spot / short perp carry
   require_positive_funding: true
-
-  # Require several consecutive confirmations before sending signal
   min_consecutive_confirmations: 3
-
-  # Do not send repeated signal for the same symbol too often
   cooldown_sec: 3600
-
-  # Hysteresis threshold in percent.
-  # Example: signal turns on at 8%, turns off below 7%.
   hysteresis_pct: 1.0
-
-  # Additional signal-level stale data limit.
-  # Usually should not be greater than quality.max_snapshot_age_ms.
   max_snapshot_age_ms: 15000
-
-  # Optional suppression around funding timestamp
   suppress_minutes_before_funding: 10
   suppress_minutes_after_funding: 10
 
-
 # ---------------------------------------------------------------------
 # Telegram
-# Secrets are not stored here.
-# Only environment variable names are stored here.
 # ---------------------------------------------------------------------
 telegram:
   enabled: true
-
-  # Environment variable names, not secret values
   token_env: TELEGRAM_BOT_TOKEN
   chat_id_env: TELEGRAM_CHAT_ID
-
-  # Anti-spam limit
   max_messages_per_hour: 20
-
   retry_attempts: 3
   timeout_ms: 5000
-
   send_heartbeat: true
   send_data_errors: true
   send_signal: true
-
 
 # ---------------------------------------------------------------------
 # Logging
@@ -227,19 +123,13 @@ logging:
   retention_days: 30
   console: true
 
-
 # ---------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------
 storage:
   mode: sqlite
   sqlite_path: data/monitor.sqlite
-
-  # Store raw exchange responses for audit/debugging
   save_raw_responses: true
-
-  # Retention for stored snapshots/alerts
   retention_days: 90
-
   save_snapshots: true
   save_alerts: true
