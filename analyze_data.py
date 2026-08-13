@@ -128,10 +128,28 @@ def load_data():
         alerts['timestamp'] = pd.to_datetime(alerts['created_at_ms'], unit='ms', utc=True)
 
     # one_time_costs from JSON payload
+    def find_key_recursive(obj, key):
+        """Recursively search for a key in nested JSON structures."""
+        if isinstance(obj, dict):
+            if key in obj:
+                return obj[key]
+            for value in obj.values():
+                found = find_key_recursive(value, key)
+                if found is not None:
+                    return found
+        elif isinstance(obj, list):
+            for value in obj:
+                found = find_key_recursive(value, key)
+                if found is not None:
+                    return found
+        return None
+
+
     def extract_one_time_costs(payload_str):
         try:
             payload = json.loads(payload_str)
-            return float(payload.get('one_time_costs', 0))
+            value = find_key_recursive(payload, 'one_time_costs')
+            return float(value) if value is not None else None
         except (json.JSONDecodeError, TypeError, ValueError):
             return None
 
@@ -187,15 +205,19 @@ def print_summary(metrics, decisions, quality, funding, alerts):
     if len(alerts) > 0:
         print(f"\n📬 Алерты:")
         print(f"  Всего: {len(alerts)}")
+        print(f"  Распределение статусов доставки:")
+        for status, count in alerts['delivery_status'].value_counts().items():
+            print(f"    {status}: {count}")
         for alert_type in sorted(alerts['alert_type'].unique()):
             type_alerts = alerts[alerts['alert_type'] == alert_type]
-            delivered = type_alerts[type_alerts['delivery_status'] == 'DELIVERED']
-            failed = type_alerts[type_alerts['delivery_status'] == 'FAILED']
-            suppressed = type_alerts[type_alerts['delivery_status'] == 'SUPPRESSED']
+            statuses = type_alerts['delivery_status'].str.lower()
+            delivered = int((statuses == 'delivered').sum())
+            failed = int((statuses == 'failed').sum())
+            suppressed = int((statuses == 'suppressed').sum())
             print(f"    {alert_type}: {len(type_alerts)} "
-                  f"(доставлено: {len(delivered)}, "
-                  f"недоставлено: {len(failed)}, "
-                  f"подавлено: {len(suppressed)})")
+                  f"(доставлено: {delivered}, "
+                  f"недоставлено: {failed}, "
+                  f"подавлено: {suppressed})")
     else:
         print(f"\n📬 Алерты: нет")
 

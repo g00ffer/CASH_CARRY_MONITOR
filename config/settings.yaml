@@ -108,11 +108,11 @@ costs:
 # ---------------------------------------------------------------------
 yield_model:
   # Planned holding horizon used for funding horizon yield
-  holding_hours: 168
+  holding_hours: 720
 
   # Horizon used to amortize one-time entry/exit costs.
   # For conservative Stage 1 keep it equal to holding_hours.
-  cost_amortization_hours: 168
+  cost_amortization_hours: 720
 
   # Do not allow artificial annualization over very short horizons
   min_cost_amortization_hours: 24
