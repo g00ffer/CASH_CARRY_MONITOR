@@ -212,7 +212,7 @@ class TelegramNotifier:
     ) -> AlertDeliveryResult:
         """Send an alert. Returns AlertDeliveryResult."""
         import uuid as _uuid
-
+        explicit_alert_id = alert_id
         if alert_id is None:
             alert_id = str(_uuid.uuid4())
         if now_ms is None:
@@ -241,7 +241,16 @@ class TelegramNotifier:
             )
 
         # Rate limiter (pass now_ms!)
-        if not self._rate_limiter.allow(alert_id, now_ms):
+        # [Global limit fix] Без явного alert_id ключ общий на тип
+        # сообщения — max_messages_per_hour реально работает как
+        # глобальный анти-спам. Явный alert_id сохраняет per-alert
+        # dedup (повторы того же алерта подавляются).
+        rate_limit_key = (
+            explicit_alert_id
+            if explicit_alert_id is not None
+            else f"global:{alert_type.value}"
+        )
+        if not self._rate_limiter.allow(rate_limit_key, now_ms):
             log_event(
                 logger,
                 event="alert_suppressed_by_rate_limiter",

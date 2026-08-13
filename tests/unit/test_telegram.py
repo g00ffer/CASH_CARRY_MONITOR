@@ -1,6 +1,12 @@
-"""Tests for monitor.notifications.telegram with mock httpx"""
+"""
+Tests for monitor.notifications.telegram with mock httpx.
+
+NOTE: rate-limiter tests assume the [Global limit fix] is applied:
+when alert_id is None, the limiter key is f"global:{alert_type.value}",
+so max_messages_per_hour works as a real global anti-spam limit.
+"""
 from __future__ import annotations
-from monitor.notifications.rate_limiter import RateLimiterParams
+
 import asyncio
 from dataclasses import dataclass
 from typing import Any
@@ -8,7 +14,6 @@ from typing import Any
 import pytest
 
 from monitor.domain import AlertDeliveryStatus
-from monitor.notifications import NotificationRateLimiter
 from monitor.notifications.telegram import (
     TelegramNotifier,
     TelegramNotifierParams,
@@ -34,10 +39,7 @@ class FakeResponse:
 
 
 class FakeAsyncClient:
-    """
-    In-memory fake of httpx.AsyncClient.
-    Configurable responses for post() calls.
-    """
+    """In-memory fake of httpx.AsyncClient with configurable responses."""
 
     def __init__(
         self,
@@ -136,7 +138,6 @@ class TestTelegramSuccess:
             assert result.status == AlertDeliveryStatus.SENT
             assert result.delivered is True
             assert len(fake_client.post_calls) >= 1
-            # URL должен вести к sendMessage для нашего токена
             call = fake_client.post_calls[0]
             assert "123456:ABCDEF" in call["url"]
             assert "sendMessage" in call["url"]
@@ -218,11 +219,45 @@ class TestTelegramSuppression:
             await notifier.close()
 
     @pytest.mark.asyncio
+    async def test_global_rate_limit_without_alert_id(
+        self, fake_client, monkeypatch,
+    ):
+        # [Global limit fix] без явного alert_id ключ общий
+        # ("global:signal"), поэтому второе сообщение подавляется.
+        params = TelegramNotifierParams(
+            token="123456:ABCDEF",
+            chat_id="987654321",
+            enabled=True,
+            max_messages_per_hour=1,
+            retry_attempts=3,
+            timeout_ms=1000,
+        )
+        monkeypatch.setattr(
+            "monitor.notifications.telegram.httpx.AsyncClient",
+            lambda *a, **kw: fake_client,
+        )
+        notifier = TelegramNotifier(params=params)
+        try:
+            r1 = await notifier.send_signal(
+                text="first", now_ms=1710000001000,
+            )
+            assert r1.status == AlertDeliveryStatus.SENT
+
+            r2 = await notifier.send_signal(
+                text="second", now_ms=1710000002000,
+            )
+            assert r2.status == AlertDeliveryStatus.SUPPRESSED
+            assert r2.suppressed_reason == "rate_limited"
+            assert r2.delivered is False
+            assert len(fake_client.post_calls) == 1
+        finally:
+            await notifier.close()
+
+    @pytest.mark.asyncio
     async def test_rate_limiter_suppresses_same_alert_id(
         self, fake_client, monkeypatch,
     ):
-        # Лимитер keyed по alert_id: повтор того же alert_id
-        # в пределах окна подавляется (dedup retries).
+        # Явный alert_id: повтор того же id в пределах окна подавляется
         params = TelegramNotifierParams(
             token="123456:ABCDEF",
             chat_id="987654321",
@@ -252,7 +287,6 @@ class TestTelegramSuppression:
             assert r2.status == AlertDeliveryStatus.SUPPRESSED
             assert r2.suppressed_reason == "rate_limited"
             assert r2.delivered is False
-            # Реальный HTTP-запрос был только один
             assert len(fake_client.post_calls) == 1
         finally:
             await notifier.close()
@@ -261,7 +295,7 @@ class TestTelegramSuppression:
     async def test_rate_limiter_allows_different_alert_ids(
         self, fake_client, monkeypatch,
     ):
-        # Разные alert_id → разные bucket'ы → оба доставлены
+        # Разные явные alert_id -> разные bucket'ы -> оба доставлены
         params = TelegramNotifierParams(
             token="123456:ABCDEF",
             chat_id="987654321",
@@ -292,7 +326,7 @@ class TestTelegramSuppression:
     async def test_rate_limiter_resets_after_window(
         self, fake_client, monkeypatch,
     ):
-        # Тот же alert_id, но после окна (час + 1ms) → снова доставлен
+        # Тот же явный alert_id, но после окна (час + 1ms) -> доставлен
         params = TelegramNotifierParams(
             token="123456:ABCDEF",
             chat_id="987654321",
@@ -330,9 +364,9 @@ class TestTelegramSuppression:
 class TestTelegramErrors:
     @pytest.mark.asyncio
     async def test_http_500_returns_failed(
-        self, telegram_params, monkeypatch,
+        self, monkeypatch,
     ):
-        # HTTP 500 не retry'ится — сразу FAILED
+        # HTTP 500 не retry'ится (predicate не матчит) — сразу FAILED
         fake = FakeAsyncClient(responses=[
             FakeResponse(status_code=500),
         ])
@@ -359,7 +393,7 @@ class TestTelegramErrors:
 
     @pytest.mark.asyncio
     async def test_persistent_errors_returns_failed(
-        self, telegram_params, monkeypatch,
+        self, monkeypatch,
     ):
         # Все попытки возвращают 500 — финальный статус FAILED
         fake = FakeAsyncClient(responses=[
@@ -393,13 +427,11 @@ class TestTelegramErrors:
 
     @pytest.mark.asyncio
     async def test_token_not_leaked_in_error_message(
-        self, telegram_params, monkeypatch,
+        self, monkeypatch,
     ):
-        # Все ответы 500 с ошибкой — error_message НЕ должен содержать токен
+        # error_message НЕ должен содержать токен бота
         secret_token = "123456:VERY_SECRET_BOT_TOKEN_XYZ"
         fake = FakeAsyncClient(responses=[
-            FakeResponse(status_code=500),
-            FakeResponse(status_code=500),
             FakeResponse(status_code=500),
         ])
         monkeypatch.setattr(
@@ -427,8 +459,9 @@ class TestTelegramErrors:
 
     @pytest.mark.asyncio
     async def test_timeout_returns_failed(
-        self, telegram_params, monkeypatch,
+        self, monkeypatch,
     ):
+        # Timeout retry'ится, но все попытки падают -> FAILED
         fake = FakeAsyncClient(responses=[
             asyncio.TimeoutError("connect timed out"),
             asyncio.TimeoutError("connect timed out"),
@@ -482,3 +515,36 @@ class TestTelegramNotifierParams:
         )
         assert params.enabled is False
         assert params.send_signal is False
+
+    def test_empty_token_when_enabled_raises(self):
+        with pytest.raises(ValueError, match="telegram token is required"):
+            TelegramNotifierParams(token="   ", chat_id="123", enabled=True)
+
+    def test_empty_chat_id_when_enabled_raises(self):
+        with pytest.raises(ValueError, match="telegram chat_id is required"):
+            TelegramNotifierParams(token="abc", chat_id="  ", enabled=True)
+
+    def test_zero_timeout_raises(self):
+        with pytest.raises(ValueError, match="timeout_ms must be > 0"):
+            TelegramNotifierParams(token="abc", chat_id="123", timeout_ms=0)
+
+    def test_negative_retry_attempts_raises(self):
+        with pytest.raises(ValueError, match="retry_attempts must be >= 0"):
+            TelegramNotifierParams(
+                token="abc", chat_id="123", retry_attempts=-1,
+            )
+
+    def test_zero_max_messages_raises(self):
+        with pytest.raises(ValueError, match="max_messages_per_hour must be > 0"):
+            TelegramNotifierParams(
+                token="abc", chat_id="123", max_messages_per_hour=0,
+            )
+
+    def test_repr_masks_secrets(self):
+        params = TelegramNotifierParams(
+            token="123456:ABCDEF",
+            chat_id="987654321",
+        )
+        rendered = repr(params)
+        assert "123456:ABCDEF" not in rendered
+        assert "987654321" not in rendered
