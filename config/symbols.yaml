@@ -6,37 +6,79 @@ symbols:
   - name: BTC_CARRY
     enabled: true
     exchange: binance
-
     base: BTC
     quote: USDT
-
     spot_symbol: BTC/USDT
     perp_symbol: BTC/USDT:USDT
-
     direction: long_spot_short_perp
-
-    # For Stage 1 this is mostly informational.
-    # It can later be used for slippage/fee estimation by notional.
     notional_usd: 10000
-
-    tags:
-      - major
-      - btc
 
   - name: ETH_CARRY
     enabled: true
     exchange: binance
-
     base: ETH
     quote: USDT
-
     spot_symbol: ETH/USDT
     perp_symbol: ETH/USDT:USDT
-
     direction: long_spot_short_perp
-
     notional_usd: 10000
 
-    tags:
-      - major
-      - eth
+  - name: SOL_CARRY
+    enabled: true
+    exchange: binance
+    base: SOL
+    quote: USDT
+    spot_symbol: SOL/USDT
+    perp_symbol: SOL/USDT:USDT
+    direction: long_spot_short_perp
+    notional_usd: 5000
+
+  - name: BNB_CARRY
+    enabled: true
+    exchange: binance
+    base: BNB
+    quote: USDT
+    spot_symbol: BNB/USDT
+    perp_symbol: BNB/USDT:USDT
+    direction: long_spot_short_perp
+    notional_usd: 5000
+
+  - name: XRP_CARRY
+    enabled: true
+    exchange: binance
+    base: XRP
+    quote: USDT
+    spot_symbol: XRP/USDT
+    perp_symbol: XRP/USDT:USDT
+    direction: long_spot_short_perp
+    notional_usd: 5000
+
+  - name: DOGE_CARRY
+    enabled: true
+    exchange: binance
+    base: DOGE
+    quote: USDT
+    spot_symbol: DOGE/USDT
+    perp_symbol: DOGE/USDT:USDT
+    direction: long_spot_short_perp
+    notional_usd: 5000
+
+  - name: ADA_CARRY
+    enabled: true
+    exchange: binance
+    base: ADA
+    quote: USDT
+    spot_symbol: ADA/USDT
+    perp_symbol: ADA/USDT:USDT
+    direction: long_spot_short_perp
+    notional_usd: 5000
+
+  - name: AVAX_CARRY
+    enabled: true
+    exchange: binance
+    base: AVAX
+    quote: USDT
+    spot_symbol: AVAX/USDT
+    perp_symbol: AVAX/USDT:USDT
+    direction: long_spot_short_perp
+    notional_usd: 5000
