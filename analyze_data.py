@@ -238,8 +238,9 @@ def plot_metrics(metrics):
     ax = axes[0]
     for i, symbol in enumerate(symbols):
         data = metrics[metrics['symbol_name'] == symbol]
-        # Downsample для скорости отрисовки
-        data_ds = data.set_index('timestamp').resample('5min').mean()
+        # Выбираем только нужные колонки
+        data_subset = data[['timestamp', 'funding_annual']].copy()
+        data_ds = data_subset.set_index('timestamp').resample('5min').mean()
         ax.plot(data_ds.index, data_ds['funding_annual'] * 100, 
                 label=symbol, color=colors[i % len(colors)], alpha=0.8, linewidth=1)
     ax.set_ylabel('Funding Annual (%)')
@@ -252,7 +253,8 @@ def plot_metrics(metrics):
     ax = axes[1]
     for i, symbol in enumerate(symbols):
         data = metrics[metrics['symbol_name'] == symbol]
-        data_ds = data.set_index('timestamp').resample('5min').mean()
+        data_subset = data[['timestamp', 'net_annual']].copy()
+        data_ds = data_subset.set_index('timestamp').resample('5min').mean()
         ax.plot(data_ds.index, data_ds['net_annual'] * 100, 
                 label=symbol, color=colors[i % len(colors)], alpha=0.8, linewidth=1)
     ax.set_ylabel('Net Annual (%)')
@@ -266,7 +268,8 @@ def plot_metrics(metrics):
     ax = axes[2]
     for i, symbol in enumerate(symbols):
         data = metrics[metrics['symbol_name'] == symbol]
-        data_ds = data.set_index('timestamp').resample('5min').mean()
+        data_subset = data[['timestamp', 'net_horizon']].copy()
+        data_ds = data_subset.set_index('timestamp').resample('5min').mean()
         ax.plot(data_ds.index, data_ds['net_horizon'] * 100, 
                 label=symbol, color=colors[i % len(colors)], alpha=0.8, linewidth=1)
     ax.set_ylabel('Net Horizon (%)')
