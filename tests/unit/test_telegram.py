@@ -218,11 +218,11 @@ class TestTelegramSuppression:
             await notifier.close()
 
     @pytest.mark.asyncio
-    async def test_rate_limiter_suppresses(
+    async def test_rate_limiter_suppresses_same_alert_id(
         self, fake_client, monkeypatch,
     ):
-        # TelegramNotifier создаёт свой rate_limiter из params.
-        # max_messages_per_hour=1 → второе сообщение в течение часа → SUPPRESSED
+        # Лимитер keyed по alert_id: повтор того же alert_id
+        # в пределах окна подавляется (dedup retries).
         params = TelegramNotifierParams(
             token="123456:ABCDEF",
             chat_id="987654321",
@@ -238,19 +238,53 @@ class TestTelegramSuppression:
         notifier = TelegramNotifier(params=params)
         try:
             r1 = await notifier.send_signal(
-                text="first", now_ms=1710000001000,
+                text="first",
+                now_ms=1710000001000,
+                alert_id="alert-001",
             )
             assert r1.status == AlertDeliveryStatus.SENT
 
-            # В пределах окна (1 час) — должно быть подавлено
             r2 = await notifier.send_signal(
-                text="second", now_ms=1710000002000,
+                text="first",
+                now_ms=1710000002000,
+                alert_id="alert-001",
             )
             assert r2.status == AlertDeliveryStatus.SUPPRESSED
+            assert r2.suppressed_reason == "rate_limited"
             assert r2.delivered is False
-
-            # Только первое сообщение реально ушло
+            # Реальный HTTP-запрос был только один
             assert len(fake_client.post_calls) == 1
+        finally:
+            await notifier.close()
+
+    @pytest.mark.asyncio
+    async def test_rate_limiter_allows_different_alert_ids(
+        self, fake_client, monkeypatch,
+    ):
+        # Разные alert_id → разные bucket'ы → оба доставлены
+        params = TelegramNotifierParams(
+            token="123456:ABCDEF",
+            chat_id="987654321",
+            enabled=True,
+            max_messages_per_hour=1,
+            retry_attempts=3,
+            timeout_ms=1000,
+        )
+        monkeypatch.setattr(
+            "monitor.notifications.telegram.httpx.AsyncClient",
+            lambda *a, **kw: fake_client,
+        )
+        notifier = TelegramNotifier(params=params)
+        try:
+            r1 = await notifier.send_signal(
+                text="first", now_ms=1710000001000, alert_id="alert-001",
+            )
+            r2 = await notifier.send_signal(
+                text="second", now_ms=1710000002000, alert_id="alert-002",
+            )
+            assert r1.status == AlertDeliveryStatus.SENT
+            assert r2.status == AlertDeliveryStatus.SENT
+            assert len(fake_client.post_calls) == 2
         finally:
             await notifier.close()
 
@@ -258,6 +292,7 @@ class TestTelegramSuppression:
     async def test_rate_limiter_resets_after_window(
         self, fake_client, monkeypatch,
     ):
+        # Тот же alert_id, но после окна (час + 1ms) → снова доставлен
         params = TelegramNotifierParams(
             token="123456:ABCDEF",
             chat_id="987654321",
@@ -273,13 +308,14 @@ class TestTelegramSuppression:
         notifier = TelegramNotifier(params=params)
         try:
             r1 = await notifier.send_signal(
-                text="first", now_ms=1710000000000,
+                text="first", now_ms=1710000000000, alert_id="alert-001",
             )
             assert r1.status == AlertDeliveryStatus.SENT
 
-            # Через час + 1ms окно прошло
             r2 = await notifier.send_signal(
-                text="second", now_ms=1710000000000 + 3_600_001,
+                text="first",
+                now_ms=1710000000000 + 3_600_001,
+                alert_id="alert-001",
             )
             assert r2.status == AlertDeliveryStatus.SENT
             assert len(fake_client.post_calls) == 2
