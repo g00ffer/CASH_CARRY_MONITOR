@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import types
 
 import pytest
 
@@ -25,7 +26,17 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def database(db_path):
-    db = Database(db_path)
+    # Duck-typing контракт DatabaseParams: те же поля, что в storage settings.yaml.
+    # Избавляет от зависимости от точной сигнатуры/экспорта DatabaseParams.
+    params = types.SimpleNamespace(
+        mode="sqlite",
+        sqlite_path=str(db_path),
+        save_raw_responses=True,
+        retention_days=90,
+        save_snapshots=True,
+        save_alerts=True,
+    )
+    db = Database(params)
     yield db
     db.close()
 
