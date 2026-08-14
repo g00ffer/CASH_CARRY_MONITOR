@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """
-Backtest v3: Early-Entry Funding Arbitrage
+Backtest v3: Early-Entry Funding Arbitrage (fixed)
 
-Гипотеза: вход за 1-2 эпохи ДО пика funding даёт лучший базис
-(толпа ещё не сжала премию) + больше высоких сеттлментов.
-
-Sweep: lead_time 0..48h. Peak = settlement с rate >= 1.0% per 8h.
-PnL = funding_income + basis_pnl - costs (notional $10k, costs 0.05%).
-
-Run: python backtest_v3_early_entry.py
-Output: backtest_v3_report.txt, backtest_v3_chart.png
+Исправления:
+  - PEAK_THRESHOLD = avg rate (~0.00007), а не max (0.00010)
+  - bisect_left для корректного включения entry-settlement
+  - HOLDING_SETTLEMENTS = 1 (только сам peak)
+  - Диагностика: сколько peaks найдено на каждом lead_time
 """
 from __future__ import annotations
 
@@ -27,7 +24,7 @@ REPORT_PATH = Path("backtest_v3_report.txt")
 CHART_PATH = Path("backtest_v3_chart.png")
 
 NOTIONAL = 10_000.0
-COSTS_PCT = 0.0005  # 0.05% round-trip (агрессивный maker)
+COSTS_PCT = 0.0005
 COSTS_USD = NOTIONAL * COSTS_PCT
 
 SYMBOLS = [
@@ -36,8 +33,13 @@ SYMBOLS = [
 ]
 
 LEAD_TIMES_H = [0, 4, 8, 12, 16, 20, 24, 32, 40, 48]
-PEAK_THRESHOLD = 0.0001       # 1.0% per 8h = 10.95% annual
-HOLDING_SETTLEMENTS = 3      # пик + ещё 2 сеттлмента
+
+# ✅ ПОРОГ СНИЖЕН: берём ~средний rate, чтобы захватить больше пиков
+# (max 0.000100 встречается 1-2 раза на символ, avg ~0.00005-0.00007)
+PEAK_THRESHOLD = 0.00007    # ~7.67% annual — много пиков для статистики
+
+# ✅ ТОЛЬКО САМ PEAK: после шторма данных может не быть
+HOLDING_SETTLEMENTS = 1
 
 
 @dataclass
@@ -55,14 +57,9 @@ class TradeResult:
     settlements_count: int
 
 
-# ======================================================================
-# Data loading
-# ======================================================================
-
 def load_settlements(
     conn: sqlite3.Connection, symbol: str,
 ) -> tuple[list[int], list[float]]:
-    """Уникальные funding settlements: (times, rates)."""
     cursor = conn.execute(
         """
         SELECT
@@ -91,7 +88,6 @@ def load_settlements(
 def load_basis_series(
     conn: sqlite3.Connection, symbol: str,
 ) -> tuple[list[int], list[float]]:
-    """Временная серия базиса из metrics: (times, basis)."""
     cursor = conn.execute(
         """
         SELECT calculated_at_ms, CAST(basis_entry AS REAL)
@@ -113,7 +109,6 @@ def load_basis_series(
 def value_at(
     ts: list[int], vals: list[float], target_ms: int,
 ) -> float:
-    """Ближайшее по времени значение серии."""
     if not ts:
         return 0.0
     i = bisect.bisect_left(ts, target_ms)
@@ -125,10 +120,6 @@ def value_at(
     return vals[i - 1] if (target_ms - before) <= (after - target_ms) else vals[i]
 
 
-# ======================================================================
-# Simulation
-# ======================================================================
-
 def simulate_early_entry(
     symbol: str,
     times: list[int],
@@ -137,29 +128,30 @@ def simulate_early_entry(
     basis_vals: list[float],
     *,
     lead_hours: float,
-) -> list[TradeResult]:
-    """Сделки: вход за lead_hours до пика, удержание HOLDING_SETTLEMENTS."""
+) -> tuple[list[TradeResult], int]:
     results: list[TradeResult] = []
     lead_ms = int(lead_hours * 3_600_000)
+    peaks_found = 0
 
     for i, peak_ms in enumerate(times):
         if rates[i] < PEAK_THRESHOLD:
             continue
+        peaks_found += 1
 
         last_idx = min(i + HOLDING_SETTLEMENTS - 1, len(times) - 1)
         exit_ms = times[last_idx]
         entry_ms = peak_ms - lead_ms
 
-        # Funding income: ВСЕ сеттлменты в (entry, exit]
-        j_start = bisect.bisect_right(times, entry_ms)
+        # ✅ ИСПРАВЛЕНО: bisect_left включает settlement в момент entry
+        j_start = bisect.bisect_left(times, entry_ms)
         j_end = bisect.bisect_right(times, exit_ms) - 1
         if j_end < j_start:
             continue
+
         funding_income = NOTIONAL * sum(rates[j_start:j_end + 1])
 
         entry_basis = value_at(basis_ts, basis_vals, entry_ms)
         exit_basis = value_at(basis_ts, basis_vals, exit_ms)
-        # long spot / short perp: прибыль при (b0 - b1) > 0
         basis_pnl = NOTIONAL * (entry_basis - exit_basis)
 
         net_pnl = funding_income + basis_pnl - COSTS_USD
@@ -180,7 +172,7 @@ def simulate_early_entry(
             ),
         )
 
-    return results
+    return results, peaks_found
 
 
 def aggregate(trades: list[TradeResult]) -> dict:
@@ -201,10 +193,6 @@ def aggregate(trades: list[TradeResult]) -> dict:
     }
 
 
-# ======================================================================
-# Sweep + report + chart
-# ======================================================================
-
 def run_sweep(conn: sqlite3.Connection) -> dict[float, list[TradeResult]]:
     data: dict[str, tuple[list[int], list[float], list[int], list[float]]] = {}
     for symbol in SYMBOLS:
@@ -212,22 +200,29 @@ def run_sweep(conn: sqlite3.Connection) -> dict[float, list[TradeResult]]:
         times, rates = load_settlements(conn, symbol)
         basis_ts, basis_vals = load_basis_series(conn, symbol)
         data[symbol] = (times, rates, basis_ts, basis_vals)
-        print(f"    settlements: {len(times)}, basis points: {len(basis_ts)}")
+        peaks = sum(1 for r in rates if r >= PEAK_THRESHOLD)
+        print(
+            f"    settlements: {len(times)}, "
+            f"peaks (>={PEAK_THRESHOLD}): {peaks}, "
+            f"basis points: {len(basis_ts)}",
+        )
 
     sweep: dict[float, list[TradeResult]] = {}
     for lead_h in LEAD_TIMES_H:
         trades: list[TradeResult] = []
+        total_peaks = 0
         for symbol, (times, rates, bts, bvals) in data.items():
-            trades.extend(
-                simulate_early_entry(
-                    symbol, times, rates, bts, bvals,
-                    lead_hours=float(lead_h),
-                ),
+            sym_trades, peaks = simulate_early_entry(
+                symbol, times, rates, bts, bvals,
+                lead_hours=float(lead_h),
             )
+            trades.extend(sym_trades)
+            total_peaks += peaks
         sweep[lead_h] = trades
         agg = aggregate(trades)
         print(
-            f"  lead={lead_h:>2}h: {agg['count']:>3} trades, "
+            f"  lead={lead_h:>2}h: peaks={total_peaks:>3}, "
+            f"trades={agg['count']:>3}, "
             f"win {agg['win_rate']:>5.1f}%, "
             f"avg PnL {agg['avg_pnl']:>+7.2f}$",
         )
@@ -237,13 +232,14 @@ def run_sweep(conn: sqlite3.Connection) -> dict[float, list[TradeResult]]:
 def write_report(sweep: dict[float, list[TradeResult]]) -> list:
     lines: list[str] = []
     lines.append("=" * 95)
-    lines.append("BACKTEST v3: Early-Entry Funding Arbitrage")
+    lines.append("BACKTEST v3: Early-Entry Funding Arbitrage (fixed)")
     lines.append("=" * 95)
     lines.append(f"Символы: {', '.join(SYMBOLS)}")
     lines.append(f"Notional: ${NOTIONAL:,.0f} | Costs: {COSTS_PCT*100:.2f}% = ${COSTS_USD:.2f}")
     lines.append(
-        f"Peak: rate >= {PEAK_THRESHOLD*100:.2f}% per 8h | "
-        f"Holding: {HOLDING_SETTLEMENTS} settlements",
+        f"Peak: rate >= {PEAK_THRESHOLD*100:.4f}% per 8h "
+        f"(= {PEAK_THRESHOLD*1095*100:.2f}% annual) | "
+        f"Holding: {HOLDING_SETTLEMENTS} settlement",
     )
     lines.append("")
 
@@ -290,9 +286,12 @@ def write_report(sweep: dict[float, list[TradeResult]]) -> list:
                 f"avg basis {agg['avg_basis']:>+7.2f}$",
             )
     else:
-        lines.append(
-            "🔴 Ни один lead_time не даёт положительного avg PnL.",
-        )
+        lines.append("🔴 Ни один lead_time не даёт положительного avg PnL.")
+        lines.append("")
+        lines.append("Возможные причины:")
+        lines.append("  1. Данные слишком короткие (5 дней)")
+        lines.append("  2. Funding штормы редки и синхронны")
+        lines.append("  3. Комиссии съедают весь edge")
     lines.append("=" * 95)
 
     report = "\n".join(lines)
