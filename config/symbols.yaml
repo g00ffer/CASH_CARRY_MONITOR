@@ -34,7 +34,7 @@ symbols:
     notional_usd: 5000
 
   - name: BNB_CARRY
-    enabled: true
+    enabled: false
     exchange: binance
     base: BNB
     quote: USDT
@@ -54,7 +54,7 @@ symbols:
     notional_usd: 5000
 
   - name: DOGE_CARRY
-    enabled: true
+    enabled: false
     exchange: binance
     base: DOGE
     quote: USDT
