@@ -100,9 +100,10 @@ def load_funding_settlements(
     to_ms: int,
 ) -> list[tuple[int, float, int]]:
     """
-    Уникальные funding settlements для символа в [from_ms, to_ms].
-    Дедупликация по next_funding_timestamp_ms.
-    Для каждого settlement берём последнюю известную rate перед ним.
+    Все funding settlements для символа в [from_ms, to_ms].
+    
+    Для каждой записи funding_snapshots используем effective_funding_rate
+    как ставку для следующего settlement (next_funding_timestamp_ms).
     """
     cursor = conn.execute(
         """
@@ -115,19 +116,16 @@ def load_funding_settlements(
           AND received_at_ms >= ?
           AND received_at_ms <= ?
           AND next_funding_timestamp_ms IS NOT NULL
+          AND next_funding_timestamp_ms >= ?
+          AND next_funding_timestamp_ms <= ?
           AND effective_funding_rate IS NOT NULL
-        ORDER BY next_funding_timestamp_ms, received_at_ms DESC
+        ORDER BY next_funding_timestamp_ms
         """,
-        (symbol, from_ms, to_ms),
+        (symbol, from_ms, to_ms, from_ms, to_ms),
     )
-    seen_next: set[int] = set()
     settlements: list[tuple[int, float, int]] = []
     for row in cursor:
-        next_ms = row[2]
-        if next_ms in seen_next:
-            continue
-        seen_next.add(next_ms)
-        settlements.append((row[0], float(row[1]), next_ms))
+        settlements.append((row[0], float(row[1]), row[2]))
     return settlements
 
 
