@@ -50,10 +50,18 @@ class TeeWriter:
 # Data loading
 # ======================================================================
 def load_data():
-    """Load all relevant tables from SQLite."""
+    """Load all relevant tables from SQLite.
+    
+    Memory-optimized: no payload, iterative loading via chunksize.
+    """
     conn = sqlite3.connect(DB_PATH)
+    CHUNK_SIZE = 10_000
 
-    metrics = pd.read_sql_query("""
+    # Metrics: one_time_costs через json_extract, БЕЗ payload
+    print("  loading metrics (chunked)...")
+    metrics_chunks = []
+    for chunk in pd.read_sql_query(
+        """
         SELECT 
             cycle_id,
             symbol_name,
@@ -62,12 +70,25 @@ def load_data():
             CAST(funding_annual AS REAL) AS funding_annual,
             CAST(net_horizon AS REAL) AS net_horizon,
             CAST(net_annual AS REAL) AS net_annual,
-            payload
+            CAST(json_extract(payload, '$.one_time_costs') AS REAL) AS one_time_costs
         FROM metrics
         ORDER BY calculated_at_ms
-    """, conn)
+        """,
+        conn,
+        chunksize=CHUNK_SIZE,
+    ):
+        # Downcast float64 → float32 для экономии памяти (2×)
+        for col in ('basis_entry', 'funding_annual', 'net_horizon', 'net_annual', 'one_time_costs'):
+            chunk[col] = chunk[col].astype('float32', errors='ignore')
+        metrics_chunks.append(chunk)
+    metrics = pd.concat(metrics_chunks, ignore_index=True)
+    del metrics_chunks
 
-    decisions = pd.read_sql_query("""
+    # Decisions: только нужные колонки (reasons достаём через SQL)
+    print("  loading decisions (chunked)...")
+    dec_chunks = []
+    for chunk in pd.read_sql_query(
+        """
         SELECT 
             cycle_id,
             symbol_name,
@@ -75,23 +96,48 @@ def load_data():
             state,
             should_alert,
             consecutive_confirmations,
-            payload
+            json_extract(payload, '$.reasons') AS reasons_json
         FROM signal_decisions
         ORDER BY decision_timestamp_ms
-    """, conn)
+        """,
+        conn,
+        chunksize=CHUNK_SIZE,
+    ):
+        # reasons_json — это строка вида '["reason1","reason2"]'
+        def parse_reasons(s):
+            if not s:
+                return ''
+            try:
+                return ', '.join(json.loads(s))
+            except Exception:
+                return ''
+        chunk['reasons'] = chunk['reasons_json'].apply(parse_reasons)
+        chunk = chunk.drop(columns=['reasons_json'])
+        dec_chunks.append(chunk)
+    decisions = pd.concat(dec_chunks, ignore_index=True)
+    del dec_chunks
 
-    quality = pd.read_sql_query("""
-        SELECT 
-            cycle_id,
-            symbol_name,
-            checked_at_ms,
-            is_ok,
-            payload
+    # Quality: БЕЗ payload
+    print("  loading quality (chunked)...")
+    quality_chunks = []
+    for chunk in pd.read_sql_query(
+        """
+        SELECT cycle_id, symbol_name, checked_at_ms, is_ok
         FROM quality_reports
         ORDER BY checked_at_ms
-    """, conn)
+        """,
+        conn,
+        chunksize=CHUNK_SIZE,
+    ):
+        quality_chunks.append(chunk)
+    quality = pd.concat(quality_chunks, ignore_index=True)
+    del quality_chunks
 
-    funding = pd.read_sql_query("""
+    # Funding: БЕЗ payload
+    print("  loading funding (chunked)...")
+    funding_chunks = []
+    for chunk in pd.read_sql_query(
+        """
         SELECT 
             cycle_id,
             symbol_name,
@@ -101,18 +147,19 @@ def load_data():
             next_funding_timestamp_ms
         FROM funding_snapshots
         ORDER BY received_at_ms
-    """, conn)
+        """,
+        conn,
+        chunksize=CHUNK_SIZE,
+    ):
+        funding_chunks.append(chunk)
+    funding = pd.concat(funding_chunks, ignore_index=True)
+    del funding_chunks
 
+    # Alerts: маленький, грузим целиком
+    print("  loading alerts...")
     alerts = pd.read_sql_query("""
-        SELECT 
-            alert_id,
-            cycle_id,
-            symbol_name,
-            alert_type,
-            delivery_status,
-            created_at_ms,
-            sent_at_ms,
-            error_message
+        SELECT alert_id, cycle_id, symbol_name, alert_type, delivery_status,
+               created_at_ms, sent_at_ms, error_message
         FROM alerts
         ORDER BY created_at_ms
     """, conn)
@@ -120,51 +167,13 @@ def load_data():
     conn.close()
 
     # Timestamp conversion
+    print("  converting timestamps...")
     metrics['timestamp'] = pd.to_datetime(metrics['calculated_at_ms'], unit='ms', utc=True)
     decisions['timestamp'] = pd.to_datetime(decisions['decision_timestamp_ms'], unit='ms', utc=True)
     quality['timestamp'] = pd.to_datetime(quality['checked_at_ms'], unit='ms', utc=True)
     funding['timestamp'] = pd.to_datetime(funding['received_at_ms'], unit='ms', utc=True)
     if len(alerts) > 0:
         alerts['timestamp'] = pd.to_datetime(alerts['created_at_ms'], unit='ms', utc=True)
-
-    # one_time_costs from JSON payload
-    def find_key_recursive(obj, key):
-        """Recursively search for a key in nested JSON structures."""
-        if isinstance(obj, dict):
-            if key in obj:
-                return obj[key]
-            for value in obj.values():
-                found = find_key_recursive(value, key)
-                if found is not None:
-                    return found
-        elif isinstance(obj, list):
-            for value in obj:
-                found = find_key_recursive(value, key)
-                if found is not None:
-                    return found
-        return None
-
-
-    def extract_one_time_costs(payload_str):
-        try:
-            payload = json.loads(payload_str)
-            value = find_key_recursive(payload, 'one_time_costs')
-            return float(value) if value is not None else None
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return None
-
-    metrics['one_time_costs'] = metrics['payload'].apply(extract_one_time_costs)
-
-    # reasons from JSON payload
-    def extract_reasons(payload_str):
-        try:
-            payload = json.loads(payload_str)
-            reasons = payload.get('reasons', [])
-            return ', '.join(reasons) if reasons else ''
-        except (json.JSONDecodeError, TypeError):
-            return ''
-
-    decisions['reasons'] = decisions['payload'].apply(extract_reasons)
 
     return metrics, decisions, quality, funding, alerts
 
