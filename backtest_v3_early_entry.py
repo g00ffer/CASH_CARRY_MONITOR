@@ -36,7 +36,7 @@ SYMBOLS = [
 ]
 
 LEAD_TIMES_H = [0, 4, 8, 12, 16, 20, 24, 32, 40, 48]
-PEAK_THRESHOLD = 0.010       # 1.0% per 8h = 10.95% annual
+PEAK_THRESHOLD = 0.001       # 1.0% per 8h = 10.95% annual
 HOLDING_SETTLEMENTS = 3      # пик + ещё 2 сеттлмента
 
 
