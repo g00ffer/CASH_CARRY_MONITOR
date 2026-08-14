@@ -138,7 +138,7 @@ def load_metrics_at(
     cursor = conn.execute(
         """
         SELECT
-            CAST(one_time_costs AS REAL),
+            CAST(json_extract(payload, '$.one_time_costs') AS REAL),
             CAST(funding_annual AS REAL),
             CAST(net_annual AS REAL)
         FROM metrics
@@ -150,9 +150,15 @@ def load_metrics_at(
     )
     row = cursor.fetchone()
     return {
-        "one_time_costs": float(row[0]) if row and row[0] is not None else 0.0025,
-        "funding_annual": float(row[1]) if row and row[1] is not None else 0.0,
-        "net_annual": float(row[2]) if row and row[2] is not None else 0.0,
+        "one_time_costs": (
+            float(row[0]) if row and row[0] is not None else 0.0025
+        ),
+        "funding_annual": (
+            float(row[1]) if row and row[1] is not None else 0.0
+        ),
+        "net_annual": (
+            float(row[2]) if row and row[2] is not None else 0.0
+        ),
     }
 
 
