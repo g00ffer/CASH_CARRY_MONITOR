@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """
-Paper Trading simulator for cash-carry-monitor.
+Paper Trading simulator v2.
 
-Replays historical signals (should_alert=True + delivered) and simulates
-virtual long-spot/short-perp positions to estimate real PnL.
+Улучшения v2:
+  1. Одна позиция на символ одновременно (дедупликация overlapping-сигналов)
+  2. Exit-логика:
+     - negative_funding: выход при отрицательной ставке сеттлмента
+     - funding_decayed: выход, если funding ниже амортизированных costs
+       N сеттлментов подряд
+     - max_holding: выход по истечении горизонта
+  3. Basis PnL: реальный PnL от движения базиса (basis_entry на входе и выходе)
+  4. Честный win rate по закрытым сделкам
 
-Run: python paper_trade.py
-Output:
-  - paper_trades.csv        (все сделки)
-  - paper_trade_report.txt  (сводка)
+Run: python paper_trade_v2.py
+Output: paper_trades_v2.csv, paper_trade_report_v2.txt
 """
 from __future__ import annotations
 
+import bisect
 import csv
 import sqlite3
 from dataclasses import asdict, dataclass
@@ -22,29 +28,38 @@ import yaml
 
 DB_PATH = Path("data/monitor.sqlite")
 SYMBOLS_PATH = Path("config/symbols.yaml")
-OUTPUT_CSV = Path("paper_trades.csv")
-REPORT_PATH = Path("paper_trade_report.txt")
+OUTPUT_CSV = Path("paper_trades_v2.csv")
+REPORT_PATH = Path("paper_trade_report_v2.txt")
 
-HOLDING_HOURS = 720  # должно совпадать с settings.yaml
-HOLDING_MS = HOLDING_HOURS * 3600 * 1000
+# ---------------------------------------------------------------------
+# Стратегия выхода (настраивается)
+# ---------------------------------------------------------------------
+MAX_HOLDING_HOURS = 720          # жёсткий потолок удержания
+MAX_HOLD_MS = MAX_HOLDING_HOURS * 3600 * 1000
+COST_AMORT_HOURS = 720           # амортизация costs (как в settings.yaml)
+PERIODS_PER_YEAR = 1095.0        # 8760 / 8
+
+EXIT_ON_NEGATIVE_FUNDING = True  # выход при rate < 0
+LOW_FUNDING_FACTOR = 1.0         # выход при funding < factor * costs_annualized
+LOW_FUNDING_CONSECUTIVE = 6      # ...в течение 6 сеттлментов подряд (48h)
 
 
 @dataclass
 class PaperTrade:
     symbol: str
-    entry_time_ms: int
     entry_time_utc: str
-    exit_time_ms: int
     exit_time_utc: str
-    entry_funding_annual_pct: float
-    entry_net_annual_pct: float
+    exit_reason: str             # negative_funding | funding_decayed | max_holding | open
+    holding_hours: float
     notional_usd: float
+    entry_funding_annual_pct: float
     funding_income_usd: float
-    one_time_costs_usd: float
+    basis_pnl_usd: float
+    costs_usd: float
     net_pnl_usd: float
     net_pnl_pct: float
-    funding_payments_count: int
-    status: str  # 'closed' | 'open'
+    settlements_count: int
+    status: str                  # closed | open
 
 
 def ms_to_utc(ms: int) -> str:
@@ -54,7 +69,6 @@ def ms_to_utc(ms: int) -> str:
 
 
 def load_symbols_notional() -> dict[str, float]:
-    """Загружает notional_usd из symbols.yaml."""
     with open(SYMBOLS_PATH, encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return {
@@ -64,16 +78,12 @@ def load_symbols_notional() -> dict[str, float]:
 
 
 def load_signals(conn: sqlite3.Connection) -> list[dict]:
-    """
-    Все моменты, когда бот реально отправил сигнал в Telegram.
-    Это триггеры входа в виртуальную позицию.
-    """
+    """Реально отправленные сигналы (триггеры входа)."""
     cursor = conn.execute(
         """
         SELECT
             d.symbol_name,
             d.decision_timestamp_ms,
-            d.cycle_id,
             CAST(m.funding_annual AS REAL) AS funding_annual,
             CAST(m.net_annual AS REAL) AS net_annual
         FROM signal_decisions d
@@ -86,68 +96,55 @@ def load_signals(conn: sqlite3.Connection) -> list[dict]:
         WHERE d.should_alert = 1
           AND a.alert_type = 'signal'
           AND a.delivery_status = 'sent'
-        ORDER BY d.symbol_name, d.decision_timestamp_ms
+        ORDER BY d.decision_timestamp_ms
         """,
     )
     cols = [c[0] for c in cursor.description]
     return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
 
-def load_funding_settlements(
-    conn: sqlite3.Connection,
-    symbol: str,
-    from_ms: int,
-    to_ms: int,
-) -> list[tuple[int, float, int]]:
+def load_symbol_settlements(
+    conn: sqlite3.Connection, symbol: str,
+) -> tuple[list[int], list[float]]:
     """
-    Funding settlements для символа в [from_ms, to_ms].
-
-    Дедупликация по next_funding_timestamp_ms (момент settlement).
-    Для каждого уникального settlement берём effective_funding_rate
-    из ПОСЛЕДНЕГО snapshot перед ним — это наиболее точная оценка
-    ставки, применённой в этот момент (settled/predicted rate).
-
-    Возвращает: (received_at_ms, rate, settlement_time_ms).
+    Все уникальные funding settlements символа за всю историю.
+    (settlement_time_ms, rate). Дедупликация по next_funding_timestamp_ms,
+    берётся последний snapshot перед сеттлментом.
     """
     cursor = conn.execute(
         """
         SELECT
-            received_at_ms,
-            CAST(effective_funding_rate AS REAL) AS funding_rate,
-            next_funding_timestamp_ms
+            next_funding_timestamp_ms,
+            CAST(effective_funding_rate AS REAL)
         FROM funding_snapshots
         WHERE symbol_name = ?
           AND next_funding_timestamp_ms IS NOT NULL
-          AND next_funding_timestamp_ms >= ?
-          AND next_funding_timestamp_ms <= ?
           AND effective_funding_rate IS NOT NULL
         ORDER BY next_funding_timestamp_ms, received_at_ms DESC
         """,
-        (symbol, from_ms, to_ms),
+        (symbol,),
     )
-
-    seen_next: set[int] = set()
-    settlements: list[tuple[int, float, int]] = []
-    for row in cursor:
-        next_ms = row[2]
-        if next_ms in seen_next:
+    seen: set[int] = set()
+    times: list[int] = []
+    rates: list[float] = []
+    for nxt, rate in cursor:
+        if nxt in seen:
             continue
-        seen_next.add(next_ms)
-        settlements.append((row[0], float(row[1]), next_ms))
-
-    return settlements
+        seen.add(nxt)
+        times.append(nxt)
+        rates.append(rate)
+    return times, rates
 
 
 def load_metrics_at(
     conn: sqlite3.Connection, symbol: str, target_ms: int,
 ) -> dict:
-    """Ближайшая metrics-запись к target_ms."""
+    """Ближайшая metrics-запись: costs + basis."""
     cursor = conn.execute(
         """
         SELECT
             CAST(json_extract(payload, '$.one_time_costs') AS REAL),
-            CAST(funding_annual AS REAL),
-            CAST(net_annual AS REAL)
+            CAST(basis_entry AS REAL)
         FROM metrics
         WHERE symbol_name = ?
         ORDER BY ABS(calculated_at_ms - ?)
@@ -160,183 +157,195 @@ def load_metrics_at(
         "one_time_costs": (
             float(row[0]) if row and row[0] is not None else 0.0025
         ),
-        "funding_annual": (
+        "basis_entry": (
             float(row[1]) if row and row[1] is not None else 0.0
-        ),
-        "net_annual": (
-            float(row[2]) if row and row[2] is not None else 0.0
         ),
     }
 
 
-def simulate_position(
-    signal: dict,
+def simulate_symbol(
     conn: sqlite3.Connection,
+    symbol: str,
+    signals: list[dict],
     notional: float,
     now_ms: int,
-) -> PaperTrade:
-    """Симулирует одну виртуальную позицию."""
-    entry_ms = int(signal["decision_timestamp_ms"])
-    exit_ms = entry_ms + HOLDING_MS
+) -> tuple[list[PaperTrade], int]:
+    """Симулирует позиции символа с дедупликацией и exit-логикой."""
+    times, rates = load_symbol_settlements(conn, symbol)
+    trades: list[PaperTrade] = []
+    skipped = 0
+    last_exit_ms = -1
 
-    metrics = load_metrics_at(conn, signal["symbol_name"], entry_ms)
-    one_time_costs_pct = metrics["one_time_costs"]
-    # one_time_costs уже включает entry+exit round-trip
-    costs_usd = notional * one_time_costs_pct
+    for sig in signals:
+        entry_ms = int(sig["decision_timestamp_ms"])
 
-    settlements = load_funding_settlements(
-        conn, signal["symbol_name"], entry_ms, exit_ms,
-    )
-    funding_income_usd = sum(
-        notional * rate
-        for _, rate, _ in settlements
-    )
+        # Дедупликация: позиция уже открыта — сигнал пропускаем
+        if entry_ms < last_exit_ms:
+            skipped += 1
+            continue
 
-    status = "closed" if exit_ms <= now_ms else "open"
-    net_pnl_usd = funding_income_usd - costs_usd
-    net_pnl_pct = net_pnl_usd / notional * 100 if notional > 0 else 0.0
+        m_entry = load_metrics_at(conn, symbol, entry_ms)
+        one_time = m_entry["one_time_costs"]
+        basis0 = m_entry["basis_entry"]
+        costs_usd = notional * one_time
+        costs_annualized = one_time * 8760.0 / COST_AMORT_HOURS
 
-    elapsed_h = (min(exit_ms, now_ms) - entry_ms) / 3_600_000
-    print(
-        f"  {signal['symbol_name']}: "
-        f"{len(settlements)} settlements за {elapsed_h:.0f}h, "
-        f"funding_income={funding_income_usd:.2f}$, "
-        f"costs={costs_usd:.2f}$",
-    )
+        funding_income = 0.0
+        settlements_count = 0
+        low_streak = 0
+        exit_ms = None
+        exit_reason = "open"
 
-    return PaperTrade(
-        symbol=signal["symbol_name"],
-        entry_time_ms=entry_ms,
-        entry_time_utc=ms_to_utc(entry_ms),
-        exit_time_ms=exit_ms,
-        exit_time_utc=ms_to_utc(exit_ms),
-        entry_funding_annual_pct=(
-            float(signal["funding_annual"] or 0) * 100
-        ),
-        entry_net_annual_pct=float(signal["net_annual"] or 0) * 100,
-        notional_usd=notional,
-        funding_income_usd=funding_income_usd,
-        one_time_costs_usd=costs_usd,
-        net_pnl_usd=net_pnl_usd,
-        net_pnl_pct=net_pnl_pct,
-        funding_payments_count=len(settlements),
-        status=status,
-    )
+        idx = bisect.bisect_right(times, entry_ms)
+        while idx < len(times) and times[idx] <= now_ms:
+            settle_ms = times[idx]
+            rate = rates[idx]
+
+            # Максимальный горизонт
+            if settle_ms > entry_ms + MAX_HOLD_MS:
+                exit_ms = entry_ms + MAX_HOLD_MS
+                exit_reason = "max_holding"
+                break
+
+            funding_income += notional * rate
+            settlements_count += 1
+
+            # Exit-триггеры
+            if EXIT_ON_NEGATIVE_FUNDING and rate < 0:
+                exit_ms = settle_ms
+                exit_reason = "negative_funding"
+                break
+
+            annualized = rate * PERIODS_PER_YEAR
+            if annualized < LOW_FUNDING_FACTOR * costs_annualized:
+                low_streak += 1
+            else:
+                low_streak = 0
+            if low_streak >= LOW_FUNDING_CONSECUTIVE:
+                exit_ms = settle_ms
+                exit_reason = "funding_decayed"
+                break
+
+            idx += 1
+
+        # Позиция не закрылась триггером — держим до now (open)
+        actual_end_ms = exit_ms if exit_ms else min(now_ms, entry_ms + MAX_HOLD_MS)
+        if exit_ms is None:
+            exit_reason = "open"
+
+        # Basis PnL: (b0 - b1) * notional
+        m_exit = load_metrics_at(conn, symbol, actual_end_ms)
+        basis1 = m_exit["basis_entry"]
+        basis_pnl_usd = notional * (basis0 - basis1)
+
+        net_pnl_usd = funding_income + basis_pnl_usd - costs_usd
+        net_pnl_pct = net_pnl_usd / notional * 100 if notional else 0.0
+        status = "closed" if exit_ms is not None else "open"
+
+        print(
+            f"  {symbol}: entry={ms_to_utc(entry_ms)[:16]} "
+            f"{exit_reason:>16} | "
+            f"{settlements_count:>3} settl | "
+            f"fund={funding_income:>+8.2f}$ "
+            f"basis={basis_pnl_usd:>+8.2f}$ "
+            f"costs={costs_usd:>6.2f}$ "
+            f"net={net_pnl_usd:>+8.2f}$",
+        )
+
+        trades.append(
+            PaperTrade(
+                symbol=symbol,
+                entry_time_utc=ms_to_utc(entry_ms),
+                exit_time_utc=ms_to_utc(actual_end_ms),
+                exit_reason=exit_reason,
+                holding_hours=(actual_end_ms - entry_ms) / 3_600_000,
+                notional_usd=notional,
+                entry_funding_annual_pct=(
+                    float(sig["funding_annual"] or 0) * 100
+                ),
+                funding_income_usd=funding_income,
+                basis_pnl_usd=basis_pnl_usd,
+                costs_usd=costs_usd,
+                net_pnl_usd=net_pnl_usd,
+                net_pnl_pct=net_pnl_pct,
+                settlements_count=settlements_count,
+                status=status,
+            ),
+        )
+        last_exit_ms = actual_end_ms
+
+    return trades, skipped
 
 
-def print_report(trades: list[PaperTrade]) -> None:
+def print_report(
+    trades: list[PaperTrade], skipped_total: int,
+) -> None:
     lines: list[str] = []
-    lines.append("=" * 100)
+    lines.append("=" * 110)
+    lines.append("PAPER TRADING v2: exit-логика + дедупликация + basis PnL")
+    lines.append("=" * 110)
+    lines.append(f"Сделок: {len(trades)} | Пропущено overlapping-сигналов: {skipped_total}")
     lines.append(
-        "PAPER TRADING: симуляция виртуальных позиций "
-        "на исторических сигналах",
-    )
-    lines.append("=" * 100)
-    lines.append(f"Всего сигналов (should_alert + delivered): {len(trades)}")
-    lines.append(
-        f"Holding horizon: {HOLDING_HOURS}h ({HOLDING_HOURS // 24}d)",
+        f"Exit-правила: negative_funding | "
+        f"funding_decayed ({LOW_FUNDING_CONSECUTIVE}×{LOW_FUNDING_FACTOR}×costs) | "
+        f"max_holding {MAX_HOLDING_HOURS}h",
     )
     lines.append("")
 
     header = (
-        f"{'#':<3} {'Symbol':<12} {'Entry UTC':<22} "
-        f"{'Fund@ent':>9} {'Net@ent':>9} "
-        f"{'Notional':>10} {'Fund Inc':>10} "
-        f"{'Costs':>8} {'Net PnL':>10} "
-        f"{'PnL%':>7} {'Sts':<6}"
+        f"{'#':<3} {'Symbol':<12} {'Entry':<17} {'Exit':<17} "
+        f"{'Reason':<15} {'Hold h':>7} {'Fund$':>9} "
+        f"{'Basis$':>9} {'Costs$':>8} {'Net$':>9} {'Net%':>7}"
     )
     lines.append(header)
     lines.append("-" * len(header))
 
     for i, t in enumerate(trades, 1):
         lines.append(
-            f"{i:<3} {t.symbol:<12} {t.entry_time_utc[:19]:<22} "
-            f"{t.entry_funding_annual_pct:>8.2f}% "
-            f"{t.entry_net_annual_pct:>8.2f}% "
-            f"{t.notional_usd:>9.0f}$ {t.funding_income_usd:>+9.2f}$ "
-            f"{t.one_time_costs_usd:>7.2f}$ {t.net_pnl_usd:>+9.2f}$ "
-            f"{t.net_pnl_pct:>+6.2f}% {t.status:<6}",
+            f"{i:<3} {t.symbol:<12} {t.entry_time_utc[5:16]:<17} "
+            f"{t.exit_time_utc[5:16]:<17} {t.exit_reason:<15} "
+            f"{t.holding_hours:>7.0f} {t.funding_income_usd:>+9.2f} "
+            f"{t.basis_pnl_usd:>+9.2f} {t.costs_usd:>8.2f} "
+            f"{t.net_pnl_usd:>+9.2f} {t.net_pnl_pct:>+6.2f}",
         )
-
     lines.append("-" * len(header))
 
-    # Сводка по символам
-    lines.append("")
-    lines.append("📊 Сводка по символам:")
-    by_symbol: dict[str, list[PaperTrade]] = {}
-    for t in trades:
-        by_symbol.setdefault(t.symbol, []).append(t)
-
-    for symbol in sorted(by_symbol):
-        st = by_symbol[symbol]
-        closed = [t for t in st if t.status == "closed"]
-        total_notional = sum(t.notional_usd for t in st)
-        total_pnl = sum(t.net_pnl_usd for t in st)
-        avg_pnl_pct = (
-            sum(t.net_pnl_pct for t in closed) / len(closed)
-            if closed else 0.0
-        )
-        winning = [t for t in closed if t.net_pnl_usd > 0]
-        win_rate = len(winning) / len(closed) * 100 if closed else 0.0
-
-        lines.append(
-            f"  {symbol:<12}: {len(st):>3} сделок "
-            f"| Notional: {total_notional:>10.0f}$ "
-            f"| PnL: {total_pnl:>+9.2f}$ "
-            f"| Avg%: {avg_pnl_pct:>+6.2f}% "
-            f"| Win rate: {win_rate:>5.1f}% "
-            f"| Closed: {len(closed)}/{len(st)}",
-        )
-
-    # Итог
-    closed_trades = [t for t in trades if t.status == "closed"]
-    open_trades = [t for t in trades if t.status == "open"]
+    closed = [t for t in trades if t.status == "closed"]
+    winning = [t for t in closed if t.net_pnl_usd > 0]
+    total_fund = sum(t.funding_income_usd for t in trades)
+    total_basis = sum(t.basis_pnl_usd for t in trades)
+    total_costs = sum(t.costs_usd for t in trades)
+    total_net = sum(t.net_pnl_usd for t in trades)
     total_notional = sum(t.notional_usd for t in trades)
-    total_income = sum(t.funding_income_usd for t in trades)
-    total_costs = sum(t.one_time_costs_usd for t in trades)
-    total_pnl_closed = sum(t.net_pnl_usd for t in closed_trades)
-    total_pnl_all = sum(t.net_pnl_usd for t in trades)
-    avg_pnl_pct = (
-        sum(t.net_pnl_pct for t in closed_trades) / len(closed_trades)
-        if closed_trades else 0.0
-    )
-    winning = [t for t in closed_trades if t.net_pnl_usd > 0]
-    win_rate = (
-        len(winning) / len(closed_trades) * 100 if closed_trades else 0.0
-    )
 
     lines.append("")
-    lines.append("=" * 100)
     lines.append("💰 ИТОГ:")
-    lines.append(
-        f"  Всего сделок: {len(trades)} "
-        f"(закрыто: {len(closed_trades)}, "
-        f"открыто: {len(open_trades)})",
-    )
-    lines.append(
-        f"  Суммарный notional (все сделки): {total_notional:,.0f}$",
-    )
-    lines.append(
-        f"  Суммарный funding income (все): {total_income:+,.2f}$",
-    )
-    lines.append(f"  Суммарные комиссии (все): {total_costs:,.2f}$")
-    lines.append(
-        f"  Чистый PnL (closed): {total_pnl_closed:+,.2f}$",
-    )
-    lines.append(
-        f"  Unrealized PnL (все, включая open): {total_pnl_all:+,.2f}$",
-    )
-    lines.append(
-        f"  Средний PnL% на сделку (closed): {avg_pnl_pct:+.2f}%",
-    )
-    lines.append(
-        f"  Win rate (closed): {win_rate:.1f}% "
-        f"({len(winning)}/{len(closed_trades)})",
-    )
+    lines.append(f"  Сделок: {len(trades)} (closed: {len(closed)})")
+    lines.append(f"  Суммарный notional: {total_notional:,.0f}$")
+    lines.append(f"  Funding income: {total_fund:+,.2f}$")
+    lines.append(f"  Basis PnL:      {total_basis:+,.2f}$")
+    lines.append(f"  Комиссии:       {total_costs:,.2f}$")
+    lines.append(f"  Чистый PnL:     {total_net:+,.2f}$")
+    if closed:
+        avg_pct = sum(t.net_pnl_pct for t in closed) / len(closed)
+        avg_hold = sum(t.holding_hours for t in closed) / len(closed)
+        lines.append(
+            f"  Win rate (closed): "
+            f"{len(winning) / len(closed) * 100:.1f}% "
+            f"({len(winning)}/{len(closed)})",
+        )
+        lines.append(f"  Средний PnL% на сделку: {avg_pct:+.2f}%")
+        lines.append(f"  Среднее время удержания: {avg_hold:.0f}h")
+    lines.append("")
+    lines.append("📊 Распределение причин выхода:")
+    reasons: dict[str, int] = {}
+    for t in trades:
+        reasons[t.exit_reason] = reasons.get(t.exit_reason, 0) + 1
+    for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {reason:<16}: {count}")
     lines.append("")
     lines.append("📁 Детали: " + str(OUTPUT_CSV))
-    lines.append("📄 Отчёт: " + str(REPORT_PATH))
-    lines.append("=" * 100)
+    lines.append("=" * 110)
 
     report_text = "\n".join(lines)
     print(report_text)
@@ -344,44 +353,41 @@ def print_report(trades: list[PaperTrade]) -> None:
 
 
 def main() -> None:
-    print("Загрузка конфигурации символов...")
     notional_map = load_symbols_notional()
-    print(f"Символы: {list(notional_map.keys())}")
-
     conn = sqlite3.connect(DB_PATH)
 
-    print("Загрузка сигналов (should_alert=True + delivered)...")
     signals = load_signals(conn)
-    print(f"Найдено {len(signals)} уникальных сигналов для симуляции")
-
-    if not signals:
-        print("⚠️  Нет сигналов для симуляции!")
-        conn.close()
-        return
+    print(f"Сигналов: {len(signals)}")
 
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
-    print("Симуляция виртуальных позиций...")
-    trades: list[PaperTrade] = []
+    all_trades: list[PaperTrade] = []
+    skipped_total = 0
+    by_symbol: dict[str, list[dict]] = {}
     for s in signals:
-        notional = notional_map.get(s["symbol_name"], 10000)
-        trade = simulate_position(s, conn, notional, now_ms)
-        trades.append(trade)
+        by_symbol.setdefault(s["symbol_name"], []).append(s)
+
+    print("Симуляция позиций (v2)...")
+    for symbol in sorted(by_symbol):
+        notional = notional_map.get(symbol, 10000)
+        trades, skipped = simulate_symbol(
+            conn, symbol, by_symbol[symbol], notional, now_ms,
+        )
+        all_trades.extend(trades)
+        skipped_total += skipped
 
     conn.close()
 
-    # CSV dump
     with open(OUTPUT_CSV, "w", newline="", encoding="utf-8") as f:
-        if trades:
+        if all_trades:
             writer = csv.DictWriter(
-                f, fieldnames=list(asdict(trades[0]).keys()),
+                f, fieldnames=list(asdict(all_trades[0]).keys()),
             )
             writer.writeheader()
-            for t in trades:
+            for t in all_trades:
                 writer.writerow(asdict(t))
-    print(f"Записано в {OUTPUT_CSV}")
 
-    print_report(trades)
+    print_report(all_trades, skipped_total)
 
 
 if __name__ == "__main__":
