@@ -100,16 +100,21 @@ def load_funding_settlements(
     to_ms: int,
 ) -> list[tuple[int, float, int]]:
     """
-    Все funding settlements для символа в [from_ms, to_ms].
+    Funding settlements для символа в [from_ms, to_ms].
     
-    Для каждой записи funding_snapshots используем effective_funding_rate
-    как ставку для следующего settlement (next_funding_timestamp_ms).
+    Дедупликация по next_funding_timestamp_ms (это момент settlement).
+    Для каждого уникального settlement берём predicted_funding_rate из
+    последнего snapshot перед ним (наиболее точная оценка ставки).
+    
+    Возвращает список (received_at_ms, rate, settlement_time_ms).
     """
+    # Ищем все snapshots в интервале, где predicted_funding_rate доступен
+    # и settlement_time попадает в [from, to]
     cursor = conn.execute(
         """
         SELECT
             received_at_ms,
-            CAST(effective_funding_rate AS REAL) AS funding_rate,
+            CAST(predicted_funding_rate AS REAL) AS predicted_rate,
             next_funding_timestamp_ms
         FROM funding_snapshots
         WHERE symbol_name = ?
@@ -118,14 +123,23 @@ def load_funding_settlements(
           AND next_funding_timestamp_ms IS NOT NULL
           AND next_funding_timestamp_ms >= ?
           AND next_funding_timestamp_ms <= ?
-          AND effective_funding_rate IS NOT NULL
-        ORDER BY next_funding_timestamp_ms
+          AND predicted_funding_rate IS NOT NULL
+        ORDER BY next_funding_timestamp_ms, received_at_ms DESC
         """,
         (symbol, from_ms, to_ms, from_ms, to_ms),
     )
+    
+    # Дедупликация: берём ОДИН snapshot на каждый уникальный next_funding
+    # (первый по received_at_ms DESC — самый свежий перед settlement)
+    seen_next: set[int] = set()
     settlements: list[tuple[int, float, int]] = []
     for row in cursor:
-        settlements.append((row[0], float(row[1]), row[2]))
+        next_ms = row[2]
+        if next_ms in seen_next:
+            continue
+        seen_next.add(next_ms)
+        settlements.append((row[0], float(row[1]), next_ms))
+    
     return settlements
 
 
@@ -186,6 +200,14 @@ def simulate_position(
     status = "closed" if exit_ms <= now_ms else "open"
     net_pnl_usd = funding_income_usd - costs_usd
     net_pnl_pct = net_pnl_usd / notional * 100 if notional > 0 else 0.0
+
+    print(
+        f"  {signal['symbol_name']}: "
+        f"{len(settlements)} settlements за "
+        f"{HOLDING_HOURS}h, "
+        f"funding_income={funding_income_usd:.2f}$, "
+        f"costs={costs_usd:.2f}$",
+    )
 
     return PaperTrade(
         symbol=signal["symbol_name"],
