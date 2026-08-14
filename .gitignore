@@ -1,17 +1,16 @@
-.env
-.env.example
-data/
-logs/
-
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
-# Data
-data/*.sqlite
-data/*.sqlite-journal
+.coverage
 
-# Generated artifacts
+# Runtime (только сервер)
+data/
+logs/
+*.log
+.env
+
+# Артефакты аналитики
 *.png
 *.csv
 analysis_report.txt
@@ -19,4 +18,4 @@ backtest_report.txt
 backtest_v3_report.txt
 backtest_v4_report.txt
 paper_trade_report.txt
-paper_trades.csv
+paper_trade_report_v2.txt
