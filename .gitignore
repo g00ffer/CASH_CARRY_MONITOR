@@ -2,6 +2,21 @@
 .env.example
 data/
 logs/
+
+# Python
 __pycache__/
 *.pyc
 .venv/
+# Data
+data/*.sqlite
+data/*.sqlite-journal
+
+# Generated artifacts
+*.png
+*.csv
+analysis_report.txt
+backtest_report.txt
+backtest_v3_report.txt
+backtest_v4_report.txt
+paper_trade_report.txt
+paper_trades.csv

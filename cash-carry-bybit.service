@@ -1,0 +1,14 @@
+[Unit]
+Description=Cash-Carry Bybit Funding Collector
+After=network.target
+
+[Service]
+Type=simple
+User=gooffer
+WorkingDirectory=/home/gooffer/cash-carry-monitor
+ExecStart=/home/gooffer/cash-carry-monitor/.venv/bin/python bybit_funding_collector.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
