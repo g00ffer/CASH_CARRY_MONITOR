@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Klines backfill: 2 года 1h-свечей Binance для momentum-исследований.
-Run: python klines_backfill.py
+Klines backfill через curl (устойчиво к middlebox/DPI).
 """
 from __future__ import annotations
 
+import json
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
-
-import httpx
 
 DB = Path("data/klines.sqlite")
 BASE = "https://api.binance.com/api/v3/klines"
@@ -38,22 +37,24 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def fetch(client: httpx.Client, symbol: str, start_ms: int, end_ms: int):
-    for attempt in range(3):
+def fetch_curl(symbol: str, start_ms: int, end_ms: int):
+    """Fetch через curl — устойчиво к middlebox/DPI."""
+    url = (
+        f"{BASE}?symbol={symbol}&interval={INTERVAL}"
+        f"&startTime={start_ms}&endTime={end_ms}&limit=1000"
+    )
+    for attempt in range(5):
         try:
-            r = client.get(
-                BASE,
-                params={
-                    "symbol": symbol, "interval": INTERVAL,
-                    "startTime": start_ms, "endTime": end_ms,
-                    "limit": 1000,
-                },
+            r = subprocess.run(
+                ["curl", "-sS", "--max-time", "60", url],
+                capture_output=True, text=True, timeout=70,
             )
-            r.raise_for_status()
-            return r.json()
+            if r.returncode != 0:
+                raise RuntimeError(f"curl exit {r.returncode}: {r.stderr}")
+            return json.loads(r.stdout)
         except Exception as exc:
-            print(f"  retry {attempt + 1}: {exc}")
-            time.sleep(2 * (attempt + 1))
+            print(f"  {symbol} retry {attempt + 1}: {exc}")
+            time.sleep(3 * (attempt + 1))
     return []
 
 
@@ -66,34 +67,34 @@ def main() -> None:
     start_all = now_ms - int(YEARS * 365.25 * 86400 * 1000)
     start_all -= start_all % MS_PER_CANDLE
 
-    with httpx.Client(timeout=15) as client:
-        for sym in SYMBOLS:
-            row = conn.execute(
-                "SELECT MAX(open_time_ms) FROM klines "
-                "WHERE symbol=? AND interval=?",
-                (sym, INTERVAL),
-            ).fetchone()
-            cursor_ms = max(
-                start_all, (row[0] + MS_PER_CANDLE) if row[0] else start_all,
+    for sym in SYMBOLS:
+        row = conn.execute(
+            "SELECT MAX(open_time_ms) FROM klines "
+            "WHERE symbol=? AND interval=?",
+            (sym, INTERVAL),
+        ).fetchone()
+        cursor_ms = max(
+            start_all, (row[0] + MS_PER_CANDLE) if row[0] else start_all,
+        )
+        total = 0
+        while cursor_ms < now_ms:
+            batch = fetch_curl(sym, cursor_ms, now_ms)
+            if not batch:
+                break
+            conn.executemany(
+                "INSERT OR IGNORE INTO klines VALUES (?,?,?,?,?,?,?,?)",
+                [
+                    (sym, INTERVAL, int(k[0]), float(k[1]),
+                     float(k[2]), float(k[3]), float(k[4]), float(k[5]))
+                    for k in batch
+                ],
             )
-            total = 0
-            while cursor_ms < now_ms:
-                batch = fetch(client, sym, cursor_ms, now_ms)
-                if not batch:
-                    break
-                conn.executemany(
-                    "INSERT OR IGNORE INTO klines VALUES (?,?,?,?,?,?,?,?)",
-                    [
-                        (sym, INTERVAL, int(k[0]), float(k[1]),
-                         float(k[2]), float(k[3]), float(k[4]), float(k[5]))
-                        for k in batch
-                    ],
-                )
-                conn.commit()
-                total += len(batch)
-                cursor_ms = int(batch[-1][0]) + MS_PER_CANDLE
-                time.sleep(0.2)
-            print(f"{sym}: {total} candles")
+            conn.commit()
+            total += len(batch)
+            cursor_ms = int(batch[-1][0]) + MS_PER_CANDLE
+            time.sleep(0.3)
+        print(f"{sym}: {total} candles")
+        time.sleep(1)
     conn.close()
     print("✅ backfill done")
 
