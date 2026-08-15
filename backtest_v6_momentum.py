@@ -380,18 +380,27 @@ def run_time_series_momentum(
 def run_breakout(
     symbol: str,
     klines: List[dict],
-    entry_period: int = 20 * 24,    # 20 days in hours
-    exit_period: int = 10 * 24,     # 10 days in hours
+    entry_period: int = 20 * 24,    # 20 дней в часах
+    exit_period: int = 10 * 24,     # 10 дней в часах
 ) -> StrategyResult:
     """
     Classic turtle-style breakout:
-        Entry long  when price > upper Donchian (entry_period)
-        Exit long   when price < lower Donchian (exit_period)
+        Entry long  when price > highest high (entry_period)
+        Exit long   when price < lowest low (exit_period)
     """
     highs = [k["high"] for k in klines]
     lows = [k["low"] for k in klines]
-    upper = donchian_high(highs, entry_period)
-    lower = donchian_low(lows, exit_period)
+    closes = [k["close"] for k in klines]
+    
+    # Pre-compute rolling max/min
+    upper = [None] * len(klines)
+    lower = [None] * len(klines)
+    
+    for i in range(entry_period, len(klines)):
+        upper[i] = max(highs[i - entry_period:i])
+    
+    for i in range(exit_period, len(klines)):
+        lower[i] = min(lows[i - exit_period:i])
 
     equity = INITIAL_CAPITAL
     equity_curve = [equity]
@@ -400,9 +409,7 @@ def run_breakout(
     cost_mult = 1.0 - TRANSACTION_COST_BPS / 10_000
 
     for i in range(max(entry_period, exit_period), len(klines)):
-        price = klines[i]["close"]
-        prev_high = klines[i - 1]["high"]
-        prev_low = klines[i - 1]["low"]
+        price = closes[i]
         cur_upper = upper[i - 1]
         cur_lower = lower[i - 1]
 
@@ -410,8 +417,8 @@ def run_breakout(
             equity_curve.append(equity)
             continue
 
-        # Entry: new high
-        if position is None and prev_high > cur_upper:
+        # Entry: close above upper channel
+        if position is None and price > cur_upper:
             entry_price = price * (1 + TRANSACTION_COST_BPS / 10_000)
             position = Trade(
                 entry_ts=klines[i]["ts"],
@@ -419,8 +426,8 @@ def run_breakout(
                 side=1,
             )
 
-        # Exit: new low
-        elif position is not None and prev_low < cur_lower:
+        # Exit: close below lower channel
+        elif position is not None and price < cur_lower:
             exit_price = price * cost_mult
             pnl = (exit_price / position.entry_price - 1.0) * equity * POSITION_SIZE_PCT
             position.exit_ts = klines[i]["ts"]
@@ -438,7 +445,7 @@ def run_breakout(
 
     # Close final position
     if position is not None:
-        price = klines[-1]["close"]
+        price = closes[-1]
         exit_price = price * cost_mult
         pnl = (exit_price / position.entry_price - 1.0) * equity * POSITION_SIZE_PCT
         position.exit_ts = klines[-1]["ts"]
@@ -526,7 +533,7 @@ def main() -> int:
               f"({klines[0]['ts'] // 1000} → {klines[-1]['ts'] // 1000})")
 
         all_results.append(run_sma_crossover(sym, klines, fast=50, slow=200))
-        all_results.append(run_time_series_momentum(sym, klines))
+        all_results.append(run_time_series_momentum(sym, klines, lookback_hours=24*180))
         all_results.append(run_breakout(sym, klines))
 
     print_results(all_results)
