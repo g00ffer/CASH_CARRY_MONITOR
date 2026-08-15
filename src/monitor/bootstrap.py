@@ -14,7 +14,7 @@ from monitor.domain import (
     StrategyDirection,
     YieldBase,
 )
-from monitor.exchanges import BinanceClient
+from monitor.exchanges import BinanceClient, BybitClient
 from monitor.notifications import (
     TelegramNotifier,
     TelegramNotifierParams,
@@ -38,12 +38,12 @@ from monitor.utils import (
     pct_to_decimal,
     to_decimal,
 )
-
 from .app import (
     CostParams,
     MonitorApp,
     YieldParams,
 )
+
 
 # ---------------------------------------------------------------------
 # Config -> domain mappers
@@ -128,7 +128,6 @@ def _cost_params_from_settings(settings: Settings) -> CostParams:
     else:
         spot_fee = pct_to_decimal(settings.fees.spot_maker_fee_pct)
         perp_fee = pct_to_decimal(settings.fees.perp_maker_fee_pct)
-
     return CostParams(
         spot_fee=spot_fee,
         perp_fee=perp_fee,
@@ -152,12 +151,10 @@ def _yield_params_from_settings(settings: Settings) -> YieldParams:
     min_cost_amortization_hours = to_decimal(
         settings.yield_model.min_cost_amortization_hours,
     )
-
     effective_holding_hours = calc_effective_holding_hours(
         holding_hours=holding_hours,
         min_cost_amortization_hours=min_cost_amortization_hours,
     )
-
     effective_cost_amortization_hours = (
         calc_effective_cost_amortization_hours(
             holding_hours=holding_hours,
@@ -165,7 +162,6 @@ def _yield_params_from_settings(settings: Settings) -> YieldParams:
             min_cost_amortization_hours=min_cost_amortization_hours,
         )
     )
-
     return YieldParams(
         holding_hours=effective_holding_hours,
         cost_amortization_hours=effective_cost_amortization_hours,
@@ -181,6 +177,50 @@ def _yield_params_from_settings(settings: Settings) -> YieldParams:
 
 
 # ---------------------------------------------------------------------
+# Exchange client factory
+# ---------------------------------------------------------------------
+
+
+def _build_exchange_client(settings: Settings):
+    """
+    Build exchange client based on settings.exchange.id.
+
+    Supported:
+        - binance
+        - bybit
+    """
+    exchange_id = str(
+        getattr(settings.exchange, "id", "binance"),
+    ).strip().lower()
+
+    common_kwargs = dict(
+        timeout_ms=settings.exchange.timeout_ms,
+        retries=settings.exchange.retries,
+        retry_backoff_ms=settings.exchange.retry_backoff_ms,
+        sandbox=settings.exchange.sandbox,
+    )
+
+    if exchange_id == "binance":
+        return BinanceClient(
+            **common_kwargs,
+            api_key=os.getenv("BINANCE_API_KEY") or None,
+            api_secret=os.getenv("BINANCE_API_SECRET") or None,
+            max_weight_per_minute=(
+                settings.exchange.max_weight_per_minute
+            ),
+        )
+
+    if exchange_id == "bybit":
+        return BybitClient(
+            **common_kwargs,
+            api_key=os.getenv("BYBIT_API_KEY") or None,
+            api_secret=os.getenv("BYBIT_API_SECRET") or None,
+        )
+
+    raise ValueError(f"unknown exchange id: {exchange_id!r}")
+
+
+# ---------------------------------------------------------------------
 # Build application
 # ---------------------------------------------------------------------
 
@@ -190,15 +230,14 @@ def build_app() -> MonitorApp:
     Build fully wired MonitorApp.
 
     Steps:
-    1. Load config.
-    2. Setup logging.
-    3. Build persistence.
-    4. Build exchange client.
-    5. Build params.
-    6. Build notifier.
-    7. Assemble MonitorApp.
+        1. Load config.
+        2. Setup logging.
+        3. Build persistence.
+        4. Build exchange client.
+        5. Build params.
+        6. Build notifier.
+        7. Assemble MonitorApp.
     """
-
     settings_path = os.getenv(
         "MONITOR_SETTINGS_PATH",
         "config/settings.yaml",
@@ -207,12 +246,10 @@ def build_app() -> MonitorApp:
         "MONITOR_SYMBOLS_PATH",
         "config/symbols.yaml",
     )
-
     settings = load_settings(
         settings_path=settings_path,
         symbols_path=symbols_path,
     )
-
     setup_logging(
         LoggingParams(
             level=settings.logging.level,
@@ -223,9 +260,7 @@ def build_app() -> MonitorApp:
             console=settings.logging.console,
         ),
     )
-
     logger = get_logger("monitor.bootstrap")
-
     log_event(
         logger,
         event="config_loaded",
@@ -235,7 +270,6 @@ def build_app() -> MonitorApp:
             "symbols_count": len(settings.symbols),
         },
     )
-
     if settings.storage.mode != "sqlite":
         raise ValueError(
             "Stage 1 application layer supports only sqlite storage mode",
@@ -244,7 +278,6 @@ def build_app() -> MonitorApp:
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
-
     database = Database(
         DatabaseParams(
             sqlite_path=settings.storage.sqlite_path,
@@ -252,18 +285,15 @@ def build_app() -> MonitorApp:
             retention_days=settings.storage.retention_days,
         ),
     )
-
     snapshot_repository = SnapshotRepository(
         database=database,
         save_raw_responses=settings.storage.save_raw_responses,
     )
-
     alert_repository = AlertRepository(database=database)
 
     # ------------------------------------------------------------------
     # Instruments
     # ------------------------------------------------------------------
-
     instruments = tuple(
         _instrument_from_symbol_config(symbol)
         for symbol in settings.symbols
@@ -272,21 +302,11 @@ def build_app() -> MonitorApp:
     # ------------------------------------------------------------------
     # Exchange client
     # ------------------------------------------------------------------
-
-    exchange_client = BinanceClient(
-        timeout_ms=settings.exchange.timeout_ms,
-        retries=settings.exchange.retries,
-        retry_backoff_ms=settings.exchange.retry_backoff_ms,
-        sandbox=settings.exchange.sandbox,
-        api_key=os.getenv("BINANCE_API_KEY") or None,
-        api_secret=os.getenv("BINANCE_API_SECRET") or None,
-        max_weight_per_minute=settings.exchange.max_weight_per_minute,
-    )
+    exchange_client = _build_exchange_client(settings)
 
     # ------------------------------------------------------------------
     # Params
     # ------------------------------------------------------------------
-
     quality_params = _quality_params_from_settings(settings)
     signal_params = _signal_params_from_settings(settings)
     cost_params = _cost_params_from_settings(settings)
@@ -295,13 +315,11 @@ def build_app() -> MonitorApp:
     # ------------------------------------------------------------------
     # Signal state
     # ------------------------------------------------------------------
-
     state_store = InMemorySignalStateStore()
 
     # ------------------------------------------------------------------
     # Telegram notifier
     # ------------------------------------------------------------------
-
     telegram_params = TelegramNotifierParams(
         token=os.getenv(settings.telegram.token_env, ""),
         chat_id=os.getenv(settings.telegram.chat_id_env, ""),
@@ -316,13 +334,11 @@ def build_app() -> MonitorApp:
         parse_mode=None,
         disable_web_page_preview=True,
     )
-
     notifier = TelegramNotifier(telegram_params)
 
     # ------------------------------------------------------------------
     # Application
     # ------------------------------------------------------------------
-
     return MonitorApp(
         settings=settings,
         database=database,

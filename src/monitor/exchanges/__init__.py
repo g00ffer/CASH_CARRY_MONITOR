@@ -5,6 +5,7 @@ from .base import (
     ExchangeRequestError,
 )
 from .binance import BinanceClient
+from .bybit import BybitClient
 from .normalizer import (
     normalize_funding_snapshot,
     normalize_perp_ticker,
@@ -20,6 +21,7 @@ __all__ = [
     "ExchangeDataError",
     "ExchangeRequestError",
     "BinanceClient",
+    "BybitClient",
     "normalize_funding_snapshot",
     "normalize_perp_ticker",
     "normalize_spot_ticker",
