@@ -1,69 +1,68 @@
 #!/usr/bin/env python3
-"""Live klines updater: upsert последних 3 свечей каждые 5 минут."""
-from __future__ import annotations
-
+"""Live klines через Bybit API (уже работает для funding)."""
 import asyncio
+import json
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
 
-import httpx
-
 DB = Path("data/klines.sqlite")
-BASE = "https://api.binance.com/api/v3/klines"
-INTERVAL = "1h"
+BYBIT_URL = "https://api.bybit.com/v5/market/kline"
+INTERVAL = "60"  # 1 hour в минутах
 POLL_SEC = 300
-SYMBOLS = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
-    "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT",
-]
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
+           "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT"]
 
-
-def init_db(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
+def init_db(conn):
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS klines (
-            symbol TEXT NOT NULL,
-            interval TEXT NOT NULL,
-            open_time_ms INTEGER NOT NULL,
-            open REAL, high REAL, low REAL,
-            close REAL, volume REAL,
+            symbol TEXT, interval TEXT, open_time_ms INTEGER,
+            open REAL, high REAL, low REAL, close REAL, volume REAL,
             PRIMARY KEY (symbol, interval, open_time_ms)
         )
-        """,
-    )
+    """)
     conn.commit()
 
+def fetch_bybit(sym):
+    url = f"{BYBIT_URL}?category=spot&symbol={sym}&interval={INTERVAL}&limit=3"
+    try:
+        r = subprocess.run(
+            ["curl", "-sS", "--max-time", "30", url],
+            capture_output=True, text=True, timeout=35
+        )
+        if r.returncode != 0:
+            return None
+        data = json.loads(r.stdout)
+        if data.get("retCode") != 0:
+            return None
+        # Bybit возвращает [start, open, high, low, close, volume, ...]
+        return [
+            (int(k[0]), float(k[1]), float(k[2]), 
+             float(k[3]), float(k[4]), float(k[5]))
+            for k in data["result"]["list"]
+        ]
+    except Exception as e:
+        print(f"warn {sym}: {e}")
+        return None
 
-async def main() -> None:
+async def main():
     conn = sqlite3.connect(DB, timeout=10)
     init_db(conn)
-    print("klines collector started")
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        while True:
-            started = time.monotonic()
-            for sym in SYMBOLS:
-                try:
-                    r = await client.get(
-                        BASE,
-                        params={"symbol": sym, "interval": INTERVAL, "limit": 3},
-                    )
-                    r.raise_for_status()
-                    conn.executemany(
-                        "INSERT OR REPLACE INTO klines "
-                        "VALUES (?,?,?,?,?,?,?,?)",
-                        [
-                            (sym, INTERVAL, int(k[0]), float(k[1]),
-                             float(k[2]), float(k[3]), float(k[4]), float(k[5]))
-                            for k in r.json()
-                        ],
-                    )
-                    conn.commit()
-                except Exception as exc:
-                    print(f"warn {sym}: {exc}")
-            await asyncio.sleep(max(1.0, POLL_SEC - (time.monotonic() - started)))
-
+    print("klines collector started (Bybit)")
+    
+    while True:
+        started = time.monotonic()
+        for sym in SYMBOLS:
+            candles = fetch_bybit(sym)
+            if not candles:
+                continue
+            conn.executemany(
+                "INSERT OR REPLACE INTO klines VALUES (?,?,?,?,?,?,?,?)",
+                [(sym, "1h", *c) for c in candles]
+            )
+            conn.commit()
+        await asyncio.sleep(max(1.0, POLL_SEC - (time.monotonic() - started)))
 
 if __name__ == "__main__":
     try:

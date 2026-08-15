@@ -1,103 +1,77 @@
 #!/usr/bin/env python3
-"""
-Klines backfill через curl (устойчиво к middlebox/DPI).
-"""
-from __future__ import annotations
-
-import json
-import sqlite3
-import subprocess
-import time
+"""Backfill klines через Bybit linear (perpetual) — оконная пагинация."""
+import sqlite3, subprocess, json, time
 from pathlib import Path
 
 DB = Path("data/klines.sqlite")
-BASE = "https://api.binance.com/api/v3/klines"
-INTERVAL = "1h"
-MS_PER_CANDLE = 3_600_000
-YEARS = 2
-SYMBOLS = [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT",
-    "XRPUSDT", "DOGEUSDT", "ADAUSDT", "AVAXUSDT",
-]
+URL = "https://api.bybit.com/v5/market/kline"
+SYMBOLS = ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","XRPUSDT","DOGEUSDT","ADAUSDT","AVAXUSDT"]
 
+def init_db(c):
+    c.execute("""CREATE TABLE IF NOT EXISTS klines(
+        symbol TEXT, interval TEXT, open_time_ms INTEGER,
+        open REAL, high REAL, low REAL, close REAL, volume REAL,
+        PRIMARY KEY(symbol,interval,open_time_ms))""")
+    c.commit()
 
-def init_db(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS klines (
-            symbol TEXT NOT NULL,
-            interval TEXT NOT NULL,
-            open_time_ms INTEGER NOT NULL,
-            open REAL, high REAL, low REAL,
-            close REAL, volume REAL,
-            PRIMARY KEY (symbol, interval, open_time_ms)
-        )
-        """,
-    )
-    conn.commit()
-
-
-def fetch_curl(symbol: str, start_ms: int, end_ms: int):
-    """Fetch через curl — устойчиво к middlebox/DPI."""
-    url = (
-        f"{BASE}?symbol={symbol}&interval={INTERVAL}"
-        f"&startTime={start_ms}&endTime={end_ms}&limit=1000"
-    )
-    for attempt in range(5):
+def fetch_batch(sym, end_ms):
+    """Запрашивает 1000 свечей, заканчивающихся на end_ms."""
+    u = (f"{URL}?category=linear&symbol={sym}&interval=60"
+         f"&limit=1000&end={end_ms}")
+    for a in range(7):
         try:
-            r = subprocess.run(
-                ["curl", "-sS", "--max-time", "60", url],
-                capture_output=True, text=True, timeout=70,
-            )
+            r = subprocess.run(["curl","-sS","--max-time","30",u],
+                             capture_output=True, text=True, timeout=35)
             if r.returncode != 0:
-                raise RuntimeError(f"curl exit {r.returncode}: {r.stderr}")
-            return json.loads(r.stdout)
-        except Exception as exc:
-            print(f"  {symbol} retry {attempt + 1}: {exc}")
-            time.sleep(3 * (attempt + 1))
+                raise RuntimeError(f"exit {r.returncode}")
+            d = json.loads(r.stdout)
+            if d.get("retCode") != 0:
+                raise RuntimeError(f"retCode={d.get('retCode')}")
+            return [(int(k[0]),float(k[1]),float(k[2]),float(k[3]),float(k[4]),float(k[5]))
+                    for k in d["result"]["list"]]
+        except Exception as x:
+            print(f"    {sym} retry {a+1}: {x}")
+            time.sleep(3 * (a+1))
     return []
 
-
-def main() -> None:
+def main():
     DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB)
-    init_db(conn)
-
+    c = sqlite3.connect(DB); init_db(c)
+    
     now_ms = int(time.time() * 1000)
-    start_all = now_ms - int(YEARS * 365.25 * 86400 * 1000)
-    start_all -= start_all % MS_PER_CANDLE
-
+    target_ms = int((time.time() - 2*365.25*86400)*1000)
+    
+    print(f"Loading 2 years of 1h candles for {len(SYMBOLS)} symbols...")
+    print(f"Target: {time.strftime('%Y-%m-%d', time.gmtime(target_ms/1000))} → now")
+    
     for sym in SYMBOLS:
-        row = conn.execute(
-            "SELECT MAX(open_time_ms) FROM klines "
-            "WHERE symbol=? AND interval=?",
-            (sym, INTERVAL),
-        ).fetchone()
-        cursor_ms = max(
-            start_all, (row[0] + MS_PER_CANDLE) if row[0] else start_all,
-        )
-        total = 0
-        while cursor_ms < now_ms:
-            batch = fetch_curl(sym, cursor_ms, now_ms)
-            if not batch:
+        tot, pages = 0, 0
+        end_ms = now_ms
+        
+        while end_ms > target_ms:
+            cs = fetch_batch(sym, end_ms)
+            if not cs:
                 break
-            conn.executemany(
-                "INSERT OR IGNORE INTO klines VALUES (?,?,?,?,?,?,?,?)",
-                [
-                    (sym, INTERVAL, int(k[0]), float(k[1]),
-                     float(k[2]), float(k[3]), float(k[4]), float(k[5]))
-                    for k in batch
-                ],
-            )
-            conn.commit()
-            total += len(batch)
-            cursor_ms = int(batch[-1][0]) + MS_PER_CANDLE
+            c.executemany("INSERT OR IGNORE INTO klines VALUES(?,?,?,?,?,?,?,?)",
+                         [(sym,"1h",*x) for x in cs])
+            c.commit()
+            tot += len(cs); pages += 1
+            
+            # сдвигаем окно: end становится временем самой старой свечи в батче
+            oldest = min(x[0] for x in cs)
+            end_ms = oldest - 1
+            
+            oldest_date = time.strftime('%Y-%m-%d', time.gmtime(oldest/1000))
+            if pages % 5 == 0:
+                print(f"  {sym}: {tot} candles, oldest={oldest_date}")
+            
             time.sleep(0.3)
-        print(f"{sym}: {total} candles")
-        time.sleep(1)
-    conn.close()
-    print("✅ backfill done")
-
+        
+        print(f"{sym}: {tot} candles ({pages} pages)")
+        time.sleep(2)  # пауза между символами (защита от DNS)
+    
+    c.close(); print("done")
 
 if __name__ == "__main__":
+    print("starting windowed backfill (linear category)...")
     main()
