@@ -109,7 +109,7 @@ telegram:
   retry_attempts: 3
   timeout_ms: 5000
   send_heartbeat: true
-  send_data_errors: true
+  send_data_errors: false
   send_signal: true
 
 # ---------------------------------------------------------------------
