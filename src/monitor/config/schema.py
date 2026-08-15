@@ -12,7 +12,6 @@ SYMBOL_NAME_REGEX = re.compile(r"^[A-Z0-9_]+$")
 class StrictModel(BaseModel):
     """
     Base model that forbids extra fields.
-
     This protects against typos in YAML config.
     """
 
@@ -41,14 +40,12 @@ class MetaSettings(StrictModel):
 # Exchange
 # ---------------------------------------------------------------------
 class ExchangeSettings(StrictModel):
-    id: Literal["binance"] = "binance"
+    id: Literal["binance", "bybit"] = "binance"
     sandbox: bool = False
-
     timeout_ms: int = Field(default=5000, gt=0)
     retries: int = Field(default=3, ge=0)
     retry_backoff_ms: int = Field(default=500, ge=0)
     rate_limit: bool = True
-
     max_weight_per_minute: Optional[int] = Field(default=None, gt=0)
 
 
@@ -69,10 +66,8 @@ class QualitySettings(StrictModel):
     max_spot_perp_time_diff_ms: int = Field(default=3000, ge=0)
     max_spread_bps: float = Field(default=10.0, ge=0)
     min_quote_volume_24h: float = Field(default=1_000_000, ge=0)
-
     require_valid_funding_interval: bool = True
     require_predicted_funding: bool = False
-
     max_price_jump_pct: float = Field(default=5.0, ge=0)
 
 
@@ -83,13 +78,10 @@ class QualitySettings(StrictModel):
 # ---------------------------------------------------------------------
 class FeesSettings(StrictModel):
     execution_mode: Literal["taker", "maker"] = "taker"
-
     spot_taker_fee_pct: float = Field(default=0.10, ge=0, le=5)
     spot_maker_fee_pct: float = Field(default=0.075, ge=0, le=5)
-
     perp_taker_fee_pct: float = Field(default=0.05, ge=0, le=5)
     perp_maker_fee_pct: float = Field(default=0.02, ge=0, le=5)
-
     bnb_discount: bool = False
 
 
@@ -111,22 +103,17 @@ class YieldModelSettings(StrictModel):
     holding_hours: float = Field(default=168, gt=0)
     cost_amortization_hours: float = Field(default=168, gt=0)
     min_cost_amortization_hours: float = Field(default=24, gt=0)
-
     include_basis_convergence: bool = False
     basis_haircut: float = Field(default=0.0, ge=0, le=1)
-
     expected_exit_basis_mode: Literal[
         "entry",
         "zero",
         "historical_median",
     ] = "entry"
-
     use_predicted_funding: bool = True
     default_funding_interval_hours: float = Field(default=8, gt=0)
-
     borrow_rate_annual_pct: float = Field(default=0.0, ge=0)
     opportunity_cost_annual_pct: float = Field(default=0.0, ge=0)
-
     yield_base: Literal["notional", "equity"] = "notional"
 
     @model_validator(mode="after")
@@ -136,19 +123,16 @@ class YieldModelSettings(StrictModel):
                 "yield_model.holding_hours cannot be less than "
                 "yield_model.min_cost_amortization_hours"
             )
-
         if self.cost_amortization_hours < self.min_cost_amortization_hours:
             raise ValueError(
                 "yield_model.cost_amortization_hours cannot be less than "
                 "yield_model.min_cost_amortization_hours"
             )
-
         if not self.include_basis_convergence and self.basis_haircut != 0.0:
             raise ValueError(
                 "yield_model.basis_haircut must be 0 when "
                 "include_basis_convergence is false"
             )
-
         return self
 
 
@@ -169,19 +153,14 @@ class MarginSettings(StrictModel):
 class SignalSettings(StrictModel):
     min_net_annual_pct: float = Field(default=8.0, ge=0)
     min_net_horizon_pct: float = Field(default=0.10, ge=0)
-
     # Percent per funding interval.
     # Example: 0.005 means 0.005% = 0.00005 decimal.
     min_funding_rate_pct_per_interval: float = Field(default=0.005, ge=0)
-
     require_positive_funding: bool = True
     min_consecutive_confirmations: int = Field(default=3, ge=1)
-
     cooldown_sec: int = Field(default=3600, ge=0)
     hysteresis_pct: float = Field(default=1.0, ge=0)
-
     max_snapshot_age_ms: int = Field(default=15000, gt=0)
-
     suppress_minutes_before_funding: int = Field(default=10, ge=0)
     suppress_minutes_after_funding: int = Field(default=10, ge=0)
 
@@ -191,15 +170,12 @@ class SignalSettings(StrictModel):
 # ---------------------------------------------------------------------
 class TelegramSettings(StrictModel):
     enabled: bool = True
-
     # These are environment variable names, not secrets.
     token_env: str = Field(default="TELEGRAM_BOT_TOKEN", min_length=1)
     chat_id_env: str = Field(default="TELEGRAM_CHAT_ID", min_length=1)
-
     max_messages_per_hour: int = Field(default=20, gt=0)
     retry_attempts: int = Field(default=3, ge=0)
     timeout_ms: int = Field(default=5000, gt=0)
-
     send_heartbeat: bool = True
     send_data_errors: bool = True
     send_signal: bool = True
@@ -219,7 +195,13 @@ class TelegramSettings(StrictModel):
 # Logging
 # ---------------------------------------------------------------------
 class LoggingSettings(StrictModel):
-    level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    level: Literal[
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    ] = "INFO"
     format: Literal["json", "text"] = "json"
     file_path: str = Field(default="logs/monitor.log", min_length=1)
     rotation: Literal["daily", "hourly", "none"] = "daily"
@@ -233,10 +215,8 @@ class LoggingSettings(StrictModel):
 class StorageSettings(StrictModel):
     mode: Literal["sqlite", "jsonl"] = "sqlite"
     sqlite_path: str = Field(default="data/monitor.sqlite", min_length=1)
-
     save_raw_responses: bool = True
     retention_days: int = Field(default=90, ge=1)
-
     save_snapshots: bool = True
     save_alerts: bool = True
 
@@ -247,18 +227,13 @@ class StorageSettings(StrictModel):
 class SymbolConfig(StrictModel):
     name: str
     enabled: bool = True
-    exchange: Literal["binance"] = "binance"
-
+    exchange: Literal["binance", "bybit"] = "binance"
     base: str
     quote: str
-
     spot_symbol: str
     perp_symbol: str
-
     direction: Literal["long_spot_short_perp"] = "long_spot_short_perp"
-
     notional_usd: float = Field(default=10000, gt=0)
-
     tags: List[str] = Field(default_factory=list)
 
     @field_validator("name", "base", "quote", "spot_symbol", "perp_symbol")
@@ -292,10 +267,8 @@ class SymbolConfig(StrictModel):
     @classmethod
     def _validate_market_symbol(cls, value: str) -> str:
         value = value.upper()
-
         if "/" not in value:
             raise ValueError("market symbol must contain base/quote format")
-
         return value
 
 
@@ -322,45 +295,37 @@ class Settings(StrictModel):
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
-
     symbols: List[SymbolConfig] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_settings(self) -> Settings:
         if not self.symbols:
             raise ValueError("symbols list cannot be empty")
-
         if self.signals.max_snapshot_age_ms > self.quality.max_snapshot_age_ms:
             raise ValueError(
                 "signals.max_snapshot_age_ms should not be greater than "
                 "quality.max_snapshot_age_ms"
             )
-
         names = [symbol.name for symbol in self.symbols]
         if len(names) != len(set(names)):
             raise ValueError("symbol names must be unique")
-
         market_pairs = [
             (symbol.exchange, symbol.spot_symbol, symbol.perp_symbol)
             for symbol in self.symbols
         ]
         if len(market_pairs) != len(set(market_pairs)):
             raise ValueError("duplicate spot/perp symbol configuration found")
-
         for symbol in self.symbols:
             expected_spot_symbol = f"{symbol.base}/{symbol.quote}"
             expected_perp_symbol = f"{symbol.base}/{symbol.quote}:{symbol.quote}"
-
             if symbol.spot_symbol != expected_spot_symbol:
                 raise ValueError(
                     f"symbol {symbol.name}: spot_symbol must be "
                     f"{expected_spot_symbol}, got {symbol.spot_symbol}"
                 )
-
             if symbol.perp_symbol != expected_perp_symbol:
                 raise ValueError(
                     f"symbol {symbol.name}: perp_symbol must be "
                     f"{expected_perp_symbol}, got {symbol.perp_symbol}"
                 )
-
         return self

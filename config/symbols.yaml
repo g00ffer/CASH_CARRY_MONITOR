@@ -5,7 +5,7 @@
 symbols:
   - name: BTC_CARRY
     enabled: true
-    exchange: binance
+    exchange: bybit
     base: BTC
     quote: USDT
     spot_symbol: BTC/USDT
@@ -15,7 +15,7 @@ symbols:
 
   - name: ETH_CARRY
     enabled: true
-    exchange: binance
+    exchange: bybit
     base: ETH
     quote: USDT
     spot_symbol: ETH/USDT
@@ -25,7 +25,7 @@ symbols:
 
   - name: SOL_CARRY
     enabled: true
-    exchange: binance
+    exchange: bybit
     base: SOL
     quote: USDT
     spot_symbol: SOL/USDT
@@ -35,7 +35,7 @@ symbols:
 
   - name: BNB_CARRY
     enabled: false
-    exchange: binance
+    exchange: bybit
     base: BNB
     quote: USDT
     spot_symbol: BNB/USDT
@@ -45,7 +45,7 @@ symbols:
 
   - name: XRP_CARRY
     enabled: true
-    exchange: binance
+    exchange: bybit
     base: XRP
     quote: USDT
     spot_symbol: XRP/USDT
@@ -55,7 +55,7 @@ symbols:
 
   - name: DOGE_CARRY
     enabled: false
-    exchange: binance
+    exchange: bybit
     base: DOGE
     quote: USDT
     spot_symbol: DOGE/USDT
@@ -65,7 +65,7 @@ symbols:
 
   - name: ADA_CARRY
     enabled: true
-    exchange: binance
+    exchange: bybit
     base: ADA
     quote: USDT
     spot_symbol: ADA/USDT
@@ -75,7 +75,7 @@ symbols:
 
   - name: AVAX_CARRY
     enabled: true
-    exchange: binance
+    exchange: bybit
     base: AVAX
     quote: USDT
     spot_symbol: AVAX/USDT
