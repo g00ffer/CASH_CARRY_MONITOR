@@ -518,7 +518,7 @@ def main() -> int:
               f"({klines[0]['ts'] // 1000} → {klines[-1]['ts'] // 1000})")
 
         all_results.append(run_sma_crossover(sym, klines, fast=50, slow=200))
-        all_results.append(run_time_series_momentum(sym, klines, lookback_hours=24*180))
+        all_results.append(run_time_series_momentum(sym, klines, lookback_hours=24*30))
         all_results.append(run_breakout(sym, klines))
 
     print_results(all_results)
