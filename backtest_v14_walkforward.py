@@ -378,7 +378,7 @@ def main():
         period_trades_count = 0
         for sym in selected:
             closes = load_klines_range(sym, start_ms, end_ms)
-            if len(closes) < 800:
+            if len(closes) < 730:
                 continue
             trades, equity_curve = run_ts_momentum_period(
                 closes, initial_equity=INITIAL_CAPITAL
@@ -413,7 +413,7 @@ def main():
             rets = []
             for sym in r["selected"]:
                 closes = load_klines_range(sym, start_ms, end_ms)
-                if len(closes) < 800:
+                if len(closes) < 730:
                     continue
                 _, ec = run_ts_momentum_period(closes, INITIAL_CAPITAL)
                 if len(ec) > 0 and ec[0] > 0:
