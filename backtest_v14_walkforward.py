@@ -375,8 +375,8 @@ def main():
             all_trades.extend(trades)
             period_trades_count += len(trades)
             # Берём return только за trading-период (после warmup)
-            if len(equity_curve) > 720 and equity_curve[720] > 0:
-                trading_ret = equity_curve[-1] / equity_curve[720] - 1.0
+            if len(equity_curve) > 0 and equity_curve[0] > 0:
+                trading_ret = equity_curve[-1] / equity_curve[0] - 1.0
                 period_rets.append(trading_ret)
 
         if period_rets:
@@ -405,8 +405,8 @@ def main():
                 if len(closes) < 800:
                     continue
                 _, ec = run_ts_momentum_period(closes, INITIAL_CAPITAL)
-                if len(ec) > 720 and ec[720] > 0:
-                    rets.append(ec[-1] / ec[720] - 1.0)
+                if len(ec) > 0 and ec[0] > 0:
+                    rets.append(ec[-1] / ec[0] - 1.0)
             if rets:
                 eq *= (1.0 + sum(rets) / len(rets))
         equity_curve.append(eq)
