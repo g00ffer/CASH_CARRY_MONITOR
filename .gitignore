@@ -19,3 +19,6 @@ backtest_v3_report.txt
 backtest_v4_report.txt
 paper_trade_report.txt
 paper_trade_report_v2.txt
+data/
+*.sqlite
+*.sqlite-journal
