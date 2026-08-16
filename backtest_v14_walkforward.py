@@ -7,11 +7,11 @@ backtest_v14_walkforward.py — Walk-forward backtest с динамически�
 1. Читаем историю из data/klines_top50.sqlite (top-50 ликвидных)
 2. Разбиваем период на окна по rebalance_days (30 дней)
 3. В начале каждого окна:
-   - Берём данные за последние lookback_days (90 дней)
+   - Берём данные за последние lookback_days (150 дней)
    - Считаем признаки: Hurst, VR720, Vol, Corr(BTC)
    - Применяем trend-фильтры
    - Применяем корреляционный фильтр между парами (corr < 0.75)
-   - Торгуем TS Momentum на отобранных
+   - Торгуем TS Momentum на отобранных (с 720h warmup)
 4. Equal weight по отобранным символам
 5. Собираем equity curve и метрики
 """
@@ -34,7 +34,7 @@ RISK_FREE_RATE = 0.04
 HOURS_PER_YEAR = 365.25 * 24
 
 # Walk-forward
-LOOKBACK_DAYS = 150
+LOOKBACK_DAYS = 150        # >= 120 для VR720 (нужно min 720*4=2880 часов)
 REBALANCE_DAYS = 30
 
 # Trend filters
@@ -58,6 +58,7 @@ class Trade:
 
 # ---------- TREND METRICS ----------
 def hurst_exponent(ts: np.ndarray) -> float:
+    """R/S анализ. H>0.5 = trending, H<0.5 = mean-reverting."""
     n = len(ts)
     if n < 200:
         return 0.5
@@ -84,6 +85,7 @@ def hurst_exponent(ts: np.ndarray) -> float:
 
 
 def variance_ratio(ts: np.ndarray, q: int) -> float:
+    """VR(q): >1 = trending на масштабе q."""
     n = len(ts)
     if n < q * 4:
         return 1.0
@@ -96,6 +98,7 @@ def variance_ratio(ts: np.ndarray, q: int) -> float:
 
 
 def realized_vol(ts: np.ndarray) -> float:
+    """Годовая реализованная волатильность."""
     if len(ts) < 2:
         return 0.0
     return float(np.std(ts) * math.sqrt(HOURS_PER_YEAR))
@@ -140,7 +143,6 @@ def select_symbols_dynamic(all_symbols: List[str], end_date: datetime) -> List[s
 
     # Считаем признаки для всех символов
     features: Dict[str, dict] = {}
-    closes_map: Dict[str, np.ndarray] = {}
 
     for sym in all_symbols:
         closes = load_klines_range(sym, start_ms, end_ms)
@@ -164,7 +166,6 @@ def select_symbols_dynamic(all_symbols: List[str], end_date: datetime) -> List[s
 
         if ok_h and ok_vr and ok_vol and ok_corr:
             features[sym] = {"vr": vr, "closes": closes, "rets": rets}
-            closes_map[sym] = closes
 
     if len(features) < 2:
         return list(features.keys())
@@ -175,9 +176,7 @@ def select_symbols_dynamic(all_symbols: List[str], end_date: datetime) -> List[s
     df = np.array(list(returns_dict.values()))
     symbols = list(returns_dict.keys())
 
-    # Матрица корреляций
     corr_matrix = np.corrcoef(df)
-
     score = {s: features[s]["vr"] for s in symbols}
     rejected = set()
     for i in range(len(symbols)):
@@ -209,7 +208,10 @@ def rolling_std(values: List[float], period: int) -> List[Optional[float]]:
 
 def run_ts_momentum_period(closes: np.ndarray, initial_equity: float,
                            lookback_hours: int = 720) -> tuple:
-    """Запускает TS Momentum. Возвращает (trades, equity_curve)."""
+    """
+    Запускает TS Momentum. Возвращает (trades, equity_curve).
+    equity_curve строится только по trading period (после warmup).
+    """
     rets = [0.0] + [
         closes[i] / closes[i - 1] - 1.0 if closes[i - 1] > 0 else 0.0
         for i in range(1, len(closes))
@@ -268,30 +270,41 @@ def run_ts_momentum_period(closes: np.ndarray, initial_equity: float,
 
 
 # ---------- METRICS ----------
-def compute_metrics(equity_curve: List[float], n_trades: int) -> dict:
+def compute_metrics(equity_curve: List[float], n_trades: int, trading_days: int) -> dict:
+    """
+    Расчёт метрик портфеля.
+    trading_days: реальное количество дней торговли.
+    """
     if len(equity_curve) < 2:
         return {"trades": 0, "win": 0.0, "cagr": 0.0, "sharpe": 0.0,
                 "sortino": 0.0, "max_dd": 0.0, "total_ret": 0.0}
 
     n = n_trades
     total_ret = equity_curve[-1] / equity_curve[0] - 1.0
-    years = (len(equity_curve) - 1) / HOURS_PER_YEAR
-    cagr = (equity_curve[-1] / equity_curve[0]) ** (1 / years) - 1.0 if years > 0 else 0.0
+    years = trading_days / 365.25 if trading_days > 0 else 0.0
+    cagr = (equity_curve[-1] / equity_curve[0]) ** (1 / years) - 1.0 \
+        if years > 0 and equity_curve[0] > 0 else 0.0
 
+    # Дневные returns (каждая точка ≈ 1 ребаланс = 30 дней)
     rets = [equity_curve[i] / equity_curve[i - 1] - 1.0
             for i in range(1, len(equity_curve)) if equity_curve[i - 1] > 0]
     if not rets:
         return {"trades": n, "win": 0.0, "cagr": cagr * 100, "sharpe": 0.0,
                 "sortino": 0.0, "max_dd": 0.0, "total_ret": total_ret * 100}
 
-    rf = (1 + RISK_FREE_RATE) ** (1 / HOURS_PER_YEAR) - 1.0
+    # Sharpe на дневных returns (примерно 1 ребаланс в 30 дней)
+    # Annualize: sqrt(365/30) = 3.49
+    rf_daily = (1 + RISK_FREE_RATE) ** (1 / 365.25) - 1.0
     mean = sum(rets) / len(rets)
     var = sum((r - mean) ** 2 for r in rets) / len(rets)
     std = math.sqrt(var) if var > 0 else 0.0
     dvar = sum((min(0, r - mean)) ** 2 for r in rets) / len(rets)
     dstd = math.sqrt(dvar) if dvar > 0 else 0.0
-    sharpe = (mean - rf) / std * math.sqrt(HOURS_PER_YEAR) if std > 1e-12 else 0.0
-    sortino = (mean - rf) / dstd * math.sqrt(HOURS_PER_YEAR) if dstd > 1e-12 else 0.0
+
+    # Annualization factor: каждая точка = REBALANCE_DAYS дней
+    ann_factor = math.sqrt(365.25 / REBALANCE_DAYS)
+    sharpe = (mean - rf_daily * REBALANCE_DAYS) / std * ann_factor if std > 1e-12 else 0.0
+    sortino = (mean - rf_daily * REBALANCE_DAYS) / dstd * ann_factor if dstd > 1e-12 else 0.0
 
     peak = equity_curve[0]
     max_dd = 0.0
@@ -357,7 +370,6 @@ def main():
             current_date = rebalance_end
             continue
 
-        # Торгуем на отобранных символах
         # Торгуем на отобранных символах (с warmup-периодом для momentum)
         warmup_start = current_date - timedelta(hours=720)
         start_ms = int(warmup_start.timestamp() * 1000)
@@ -374,7 +386,7 @@ def main():
             )
             all_trades.extend(trades)
             period_trades_count += len(trades)
-            # Берём return только за trading-период (после warmup)
+            # Берём return за весь trading period (после warmup)
             if len(equity_curve) > 0 and equity_curve[0] > 0:
                 trading_ret = equity_curve[-1] / equity_curve[0] - 1.0
                 period_rets.append(trading_ret)
@@ -389,7 +401,7 @@ def main():
 
         current_date = rebalance_end
 
-    # Итоговые метрики (упрощённо: одна точка в equity curve на ребаланс)
+    # Итоговая equity curve (1 точка на ребаланс)
     equity_curve = [INITIAL_CAPITAL]
     eq = INITIAL_CAPITAL
     for r in rebalance_log:
@@ -411,7 +423,8 @@ def main():
                 eq *= (1.0 + sum(rets) / len(rets))
         equity_curve.append(eq)
 
-    metrics = compute_metrics(equity_curve, len(all_trades))
+    trading_days = (end_date - trade_start).days
+    metrics = compute_metrics(equity_curve, len(all_trades), trading_days)
 
     print()
     print("=" * 85)
@@ -425,6 +438,7 @@ def main():
     print(f"  Total Return:     {metrics['total_ret']:.2f}%")
     print(f"  Final Equity:     ${equity:.2f}")
     print(f"  Rebalances:       {rebalance_count}")
+    print(f"  Trading days:     {trading_days}")
     avg_selected = (
         sum(r["n"] for r in rebalance_log) / len(rebalance_log)
         if rebalance_log else 0
