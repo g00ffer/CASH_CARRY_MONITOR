@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-DB = Path("data/klines.sqlite")
+DB = Path("data/klines_daily.sqlite")
 SYMBOLS = ["ETHUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT"]
 
 # Global parameters
@@ -30,7 +30,7 @@ POSITION_SIZE_PCT = 0.10          # 10% of equity per position
 VOL_TARGET_ANNUAL = 0.15          # 15% annual vol target
 TRANSACTION_COST_BPS = 5.0        # 5 bps per trade
 RISK_FREE_RATE = 0.04             # 4% annual (for Sharpe)
-HOURS_PER_YEAR = 365.25 * 24
+BARS_PER_YEAR = 365.25
 
 
 # =====================================================================
@@ -42,7 +42,7 @@ def load_klines(symbol: str) -> List[dict]:
     conn = sqlite3.connect(DB)
     rows = conn.execute(
         "SELECT open_time_ms, open, high, low, close, volume "
-        "FROM klines WHERE symbol=? AND interval='1h' "
+        "FROM klines WHERE symbol=? AND interval='1d' "
         "ORDER BY open_time_ms ASC",
         (symbol,),
     ).fetchall()
@@ -149,7 +149,7 @@ class StrategyResult:
         if len(self.equity_curve) < 2:
             return 0.0
         hours = len(self.equity_curve)
-        years = hours / HOURS_PER_YEAR
+        years = hours / BARS_PER_YEAR
         if years <= 0:
             return 0.0
         return (self.equity_curve[-1] / self.equity_curve[0]) ** (1 / years) - 1.0
@@ -164,8 +164,8 @@ class StrategyResult:
         std = math.sqrt(var)
         if std <= 0:
             return 0.0
-        rf_h = (1 + RISK_FREE_RATE) ** (1 / HOURS_PER_YEAR) - 1
-        return (mean - rf_h) / std * math.sqrt(HOURS_PER_YEAR)
+        rf_per_bar = (1 + RISK_FREE_RATE) ** (1 / BARS_PER_YEAR) - 1
+        return (mean - rf_per_bar) / std * math.sqrt(BARS_PER_YEAR)
 
     @property
     def sortino(self) -> float:
@@ -179,8 +179,8 @@ class StrategyResult:
         dstd = math.sqrt(sum((r) ** 2 for r in neg) / len(neg))
         if dstd <= 0:
             return 0.0
-        rf_h = (1 + RISK_FREE_RATE) ** (1 / HOURS_PER_YEAR) - 1
-        return (mean - rf_h) / dstd * math.sqrt(HOURS_PER_YEAR)
+        rf_per_bar = (1 + RISK_FREE_RATE) ** (1 / BARS_PER_YEAR) - 1
+        return (mean - rf_per_bar) / dstd * math.sqrt(BARS_PER_YEAR)
 
     @property
     def max_drawdown(self) -> float:
@@ -213,8 +213,8 @@ class StrategyResult:
 def run_sma_crossover(
     symbol: str,
     klines: List[dict],
-    fast: int = 50,
-    slow: int = 200,
+    fast: int = 10,
+    slow: int = 50,
 ) -> StrategyResult:
     """Long when fast SMA > slow SMA; flat otherwise."""
     closes = [k["close"] for k in klines]
@@ -281,8 +281,8 @@ def run_sma_crossover(
 def run_time_series_momentum(
     symbol: str,
     klines: List[dict],
-    lookback_hours: int = 24 * 30,   # ~1 month
-    vol_window: int = 24 * 30,       # 30 days
+    lookback_days: int = 30,   # ~1 month
+    vol_window: int = 30,       # 30 days
 ) -> StrategyResult:
     """
     Time-series momentum:
@@ -303,11 +303,11 @@ def run_time_series_momentum(
             hourly_rets.append(0.0)
 
     vol = rolling_std(hourly_rets, vol_window)
-    vol_target_hourly = VOL_TARGET_ANNUAL / math.sqrt(HOURS_PER_YEAR)
+    vol_target_per_bar = VOL_TARGET_ANNUAL / math.sqrt(BARS_PER_YEAR)
     cost_mult = 1.0 - TRANSACTION_COST_BPS / 10_000
 
-    for i in range(max(lookback_hours, vol_window), len(klines)):
-        prev_close = closes[i - lookback_hours]
+    for i in range(max(lookback_days, vol_window), len(klines)):
+        prev_close = closes[i - lookback_days]
         cur_close = closes[i]
         if prev_close <= 0:
             equity_curve.append(equity)
@@ -319,7 +319,7 @@ def run_time_series_momentum(
             equity_curve.append(equity)
             continue
 
-        vol_scalar = min(2.0, max(0.1, vol_target_hourly / realized_vol))
+        vol_scalar = min(2.0, max(0.1, vol_target_per_bar / realized_vol))
         side = 1 if mom_ret > 0 else -1
         target_side = side
         target_size_pct = POSITION_SIZE_PCT * vol_scalar
@@ -365,7 +365,7 @@ def run_time_series_momentum(
         equity_curve[-1] = equity
 
     return StrategyResult(
-        name=f"TS Momentum ({lookback_hours}h)",
+        name=f"TS Momentum ({lookback_days}d)",
         symbol=symbol,
         trades=trades,
         equity_curve=equity_curve,
@@ -379,8 +379,8 @@ def run_time_series_momentum(
 def run_breakout(
     symbol: str,
     klines: List[dict],
-    entry_period: int = 20 * 24,
-    exit_period: int = 10 * 24,
+    entry_period: int = 20,
+    exit_period: int = 10,
 ) -> StrategyResult:
     """
     Donchian breakout: long on new high, exit on new low.
@@ -440,7 +440,7 @@ def run_breakout(
         equity_curve[-1] = equity
 
     return StrategyResult(
-        name=f"Breakout ({entry_period // 24}d/{exit_period // 24}d)",
+        name=f"Breakout ({entry_period}d/{exit_period}d)",
         symbol=symbol,
         trades=trades,
         equity_curve=equity_curve,
@@ -516,8 +516,8 @@ def main() -> int:
         print(f"  {sym}: {len(klines)} candles "
               f"({klines[0]['ts'] // 1000} → {klines[-1]['ts'] // 1000})")
 
-        all_results.append(run_sma_crossover(sym, klines, fast=50, slow=200))
-        all_results.append(run_time_series_momentum(sym, klines, lookback_hours=24*30))
+        all_results.append(run_sma_crossover(sym, klines, fast=10, slow=50))
+        all_results.append(run_time_series_momentum(sym, klines, lookback_days=30))
         all_results.append(run_breakout(sym, klines))
 
     print_results(all_results)
