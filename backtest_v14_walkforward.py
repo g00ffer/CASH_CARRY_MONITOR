@@ -209,7 +209,7 @@ def rolling_std(values: List[float], period: int) -> List[Optional[float]]:
 
 def run_ts_momentum_period(closes: np.ndarray, initial_equity: float,
                            lookback_hours: int = 720) -> tuple:
-    """Запускает TS Momentum на массиве close-цен."""
+    """Запускает TS Momentum. Возвращает (trades, equity_curve)."""
     rets = [0.0] + [
         closes[i] / closes[i - 1] - 1.0 if closes[i - 1] > 0 else 0.0
         for i in range(1, len(closes))
@@ -219,6 +219,7 @@ def run_ts_momentum_period(closes: np.ndarray, initial_equity: float,
     cm = 1.0 - TRANSACTION_COST_BPS / 10_000
 
     eq = initial_equity
+    equity_curve = [eq]
     trades: List[Trade] = []
     pos: Optional[Trade] = None
 
@@ -226,10 +227,12 @@ def run_ts_momentum_period(closes: np.ndarray, initial_equity: float,
         price = closes[i]
         prev = closes[i - lookback_hours]
         if prev <= 0:
+            equity_curve.append(eq)
             continue
         mom = price / prev - 1.0
         rv = vol[i]
         if rv is None or rv <= 1e-10:
+            equity_curve.append(eq)
             continue
         vs = min(2.0, max(0.1, vt / rv))
         side = 1 if mom > 0 else -1
@@ -250,14 +253,18 @@ def run_ts_momentum_period(closes: np.ndarray, initial_equity: float,
                 side=side,
             )
 
+        mtm = (price / pos.entry_price - 1.0) * eq * tp * pos.side if pos else 0.0
+        equity_curve.append(eq + mtm)
+
     if pos is not None:
         ep = closes[-1] * cm
         pos.exit_price = ep
         pos.pnl_pct = (ep / pos.entry_price - 1.0) * pos.side
         eq += pos.pnl_pct * eq * POSITION_SIZE_PCT
         trades.append(pos)
+        equity_curve[-1] = eq
 
-    return trades, eq
+    return trades, equity_curve
 
 
 # ---------- METRICS ----------
@@ -351,7 +358,9 @@ def main():
             continue
 
         # Торгуем на отобранных символах
-        start_ms = int(current_date.timestamp() * 1000)
+        # Торгуем на отобранных символах (с warmup-периодом для momentum)
+        warmup_start = current_date - timedelta(hours=720)
+        start_ms = int(warmup_start.timestamp() * 1000)
         end_ms = int(rebalance_end.timestamp() * 1000)
 
         period_rets = []
@@ -360,13 +369,15 @@ def main():
             closes = load_klines_range(sym, start_ms, end_ms)
             if len(closes) < 800:
                 continue
-            trades, final_eq = run_ts_momentum_period(
+            trades, equity_curve = run_ts_momentum_period(
                 closes, initial_equity=INITIAL_CAPITAL
             )
             all_trades.extend(trades)
             period_trades_count += len(trades)
-            if final_eq > 0:
-                period_rets.append(final_eq / INITIAL_CAPITAL - 1.0)
+            # Берём return только за trading-период (после warmup)
+            if len(equity_curve) > 720 and equity_curve[720] > 0:
+                trading_ret = equity_curve[-1] / equity_curve[720] - 1.0
+                period_rets.append(trading_ret)
 
         if period_rets:
             avg_ret = sum(period_rets) / len(period_rets)
@@ -384,7 +395,8 @@ def main():
     for r in rebalance_log:
         date = datetime.combine(r["date"], datetime.min.time())
         end = date + timedelta(days=REBALANCE_DAYS)
-        start_ms = int(date.timestamp() * 1000)
+        warmup_start = date - timedelta(hours=720)
+        start_ms = int(warmup_start.timestamp() * 1000)
         end_ms = int(end.timestamp() * 1000)
         if r["selected"]:
             rets = []
@@ -392,8 +404,9 @@ def main():
                 closes = load_klines_range(sym, start_ms, end_ms)
                 if len(closes) < 800:
                     continue
-                _, feq = run_ts_momentum_period(closes, INITIAL_CAPITAL)
-                rets.append(feq / INITIAL_CAPITAL - 1.0)
+                _, ec = run_ts_momentum_period(closes, INITIAL_CAPITAL)
+                if len(ec) > 720 and ec[720] > 0:
+                    rets.append(ec[-1] / ec[720] - 1.0)
             if rets:
                 eq *= (1.0 + sum(rets) / len(rets))
         equity_curve.append(eq)
