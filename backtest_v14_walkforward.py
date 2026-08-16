@@ -35,7 +35,7 @@ HOURS_PER_YEAR = 365.25 * 24
 
 # Walk-forward
 LOOKBACK_DAYS = 150        # >= 120 для VR720 (нужно min 720*4=2880 часов)
-REBALANCE_DAYS = 30
+REBALANCE_DAYS = 1
 
 # Trend filters
 MIN_HURST = 0.55
@@ -302,9 +302,8 @@ def compute_metrics(equity_curve: List[float], n_trades: int, trading_days: int)
     dstd = math.sqrt(dvar) if dvar > 0 else 0.0
 
     # Annualization factor: каждая точка = REBALANCE_DAYS дней
-    ann_factor = math.sqrt(365.25 / REBALANCE_DAYS)
+    ann_factor = math.sqrt(365.25 / REBALANCE_DAYS)  # при REBALANCE_DAYS=1 → sqrt(365) = 19.1
     sharpe = (mean - rf_daily * REBALANCE_DAYS) / std * ann_factor if std > 1e-12 else 0.0
-    sortino = (mean - rf_daily * REBALANCE_DAYS) / dstd * ann_factor if dstd > 1e-12 else 0.0
 
     peak = equity_curve[0]
     max_dd = 0.0
