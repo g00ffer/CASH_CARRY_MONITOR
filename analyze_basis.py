@@ -81,9 +81,9 @@ def analyze_metrics_table(conn: sqlite3.Connection) -> None:
     print("  " + "-" * 55)
     for row in stats[:20]:
         sym, n, avg, mn, mx = row
-        avg_pct = avg * 100 if avg else 0
-        mn_pct = mn * 100 if mn else 0
-        mx_pct = mx * 100 if mx else 0
+        avg_pct = float(avg) * 100 if avg else 0.0
+        mn_pct = float(mn) * 100 if mn else 0.0
+        mx_pct = float(mx) * 100 if mx else 0.0
         print(f"  {sym:<15} {n:>8} {avg_pct:>9.4f} {mn_pct:>7.4f} {mx_pct:>7.4f}")
 
     # Общая статистика
