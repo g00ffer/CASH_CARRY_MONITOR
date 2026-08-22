@@ -51,7 +51,7 @@ PIN_SHADOW_RATIO = 2.0    # тень >= 2x тела, цвет любой
 RAILS_BODY_MIN = 0.4      # тела рельс >= 40% диапазона (не доджи)
 
 # Вход/выход
-RISK_REWARD = 2.0
+RISK_REWARD = 3.0
 TAKER_FEE = 0.0014        # 0.14% per side = 0.28% на круг
 MAX_HOLDING_H = 72
 MIN_STOP_PCT = 0.5
