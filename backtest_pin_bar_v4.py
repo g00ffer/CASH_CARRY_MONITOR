@@ -53,7 +53,7 @@ RAILS_BODY_MIN = 0.4      # тела рельс >= 40% диапазона (не 
 # Вход/выход
 RISK_REWARD = 3.0
 TAKER_FEE = 0.0014        # 0.14% per side = 0.28% на круг
-MAX_HOLDING_H = 72
+MAX_HOLDING_H = 144
 MIN_STOP_PCT = 0.5
 
 
