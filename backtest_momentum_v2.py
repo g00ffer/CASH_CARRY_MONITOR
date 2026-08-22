@@ -146,7 +146,9 @@ def filter_and_align(
         if common_timestamps is not None:
             common_timestamps = common_timestamps[:min_len]
 
-    return aligned_data, common_timestamps or np.array([]), 0, 0
+    if common_timestamps is None:
+        common_timestamps = np.array([])
+    return aligned_data, common_timestamps, 0, 0
 
 
 # ─────────────────────────────────────────────────────────────────────
