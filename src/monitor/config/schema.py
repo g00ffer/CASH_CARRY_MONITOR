@@ -208,7 +208,10 @@ class UniverseSettings(StrictModel):
         default_factory=UniverseScoreWeights,
     )
     candidate_universe_size: int = Field(default=100, gt=0)
-
+    # Notional для динамически отобранных инструментов,
+    # если их нет в symbols.yaml
+    default_notional_usd: float = Field(default=5000, gt=0)
+    
 # ---------------------------------------------------------------------
 # Telegram
 # ---------------------------------------------------------------------

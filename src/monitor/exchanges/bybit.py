@@ -217,6 +217,33 @@ class BybitClient(ExchangeClient):
                 f"failed to normalize perp ticker for {symbol}",
             ) from exc
 
+
+    async def fetch_all_perp_tickers(self) -> list[PerpTicker]:
+        await self._ensure_markets_loaded()
+        try:
+            raws = await retry_async(
+                self._futures.fetch_tickers,
+                policy=self._retry_policy,
+            )
+        except Exception as exc:
+            raise ExchangeRequestError(
+                "failed to fetch all perp tickers",
+            ) from exc
+        received_at_ms = utc_now_ms()
+        tickers: list[PerpTicker] = []
+        for symbol, raw in raws.items():
+            try:
+                tickers.append(
+                    normalize_perp_ticker(
+                        symbol=symbol,
+                        raw=raw,
+                        received_at_ms=received_at_ms,
+                    ),
+                )
+            except ExchangeDataError:
+                continue
+        return tickers
+
     # ------------------------------------------------------------------
     # Funding snapshot
     # ------------------------------------------------------------------
@@ -311,3 +338,5 @@ class BybitClient(ExchangeClient):
         if decimal_value <= ZERO:
             raise ExchangeDataError(f"{field_name} must be positive")
         return decimal_value
+
+    

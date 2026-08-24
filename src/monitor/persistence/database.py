@@ -212,8 +212,31 @@ CREATE INDEX IF NOT EXISTS idx_alerts_cycle
 
 CREATE INDEX IF NOT EXISTS idx_alerts_symbol_time
     ON alerts (symbol_name, created_at_ms);
-"""
 
+CREATE TABLE IF NOT EXISTS active_universe (
+    instrument_name TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    score REAL,
+    is_anchor INTEGER NOT NULL,
+    quote_volume_24h TEXT,
+    funding_rate TEXT,
+    updated_at_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS universe_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    refreshed_at_ms INTEGER NOT NULL,
+    instrument_name TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    included INTEGER NOT NULL,
+    is_anchor INTEGER NOT NULL,
+    score REAL,
+    quote_volume_24h TEXT,
+    funding_rate TEXT,
+    reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_universe_history_time
+    ON universe_history (refreshed_at_ms);    
+"""
 
 class Database:
     """

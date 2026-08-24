@@ -82,3 +82,11 @@ class ExchangeClient(ABC):
         Example:
             perp_symbol = "BTC/USDT:USDT"
         """
+    async def fetch_all_perp_tickers(self) -> list[PerpTicker]:
+        """
+        Fetch all perpetual tickers in one request (for universe selection).
+        Default: not implemented; concrete clients override.
+        """
+        raise NotImplementedError(
+            "fetch_all_perp_tickers is not implemented by this client",
+        )
