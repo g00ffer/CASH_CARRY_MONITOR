@@ -1,80 +1,69 @@
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Sequence
 
 from monitor.utils import utc_now_ms
 
-from .database import Database
+from .database import Database, to_json
 
 
 class UniverseRepository:
-    """
-    Repository for dynamic universe pool and its history.
-    """
+    """Хранение активного пула и истории отбора."""
 
     def __init__(self, database: Database) -> None:
         self._db = database
 
-    def replace_active(
-        self,
-        rows: Sequence[dict],
-        refreshed_at_ms: int | None = None,
-    ) -> None:
-        """
-        Replace active_universe contents atomically.
-        rows: dicts with keys instrument_name, symbol, score,
-        is_anchor, quote_volume_24h, funding_rate.
-        """
-        now_ms = refreshed_at_ms or utc_now_ms()
+    def replace_active(self, candidates: Sequence, now_ms: int) -> None:
         self._db.execute("DELETE FROM active_universe")
-        for row in rows:
+        for c in candidates:
+            if not c.selected:
+                continue
             self._db.execute(
                 """
                 INSERT INTO active_universe (
-                    instrument_name, symbol, score, is_anchor,
-                    quote_volume_24h, funding_rate, updated_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    symbol_name, score, funding_rate, quote_volume_24h,
+                    open_interest, spread, is_anchor, refreshed_at_ms,
+                    payload, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    row["instrument_name"],
-                    row["symbol"],
-                    row.get("score"),
-                    int(row.get("is_anchor", False)),
-                    row.get("quote_volume_24h"),
-                    row.get("funding_rate"),
+                    c.name,
+                    str(c.score),
+                    str(c.funding_rate),
+                    str(c.quote_volume_24h),
+                    (
+                        str(c.open_interest)
+                        if c.open_interest is not None
+                        else None
+                    ),
+                    str(c.spread),
+                    int(c.is_anchor),
                     now_ms,
+                    to_json(asdict(c)),
+                    utc_now_ms(),
                 ),
             )
 
-    def load_active(self) -> list[dict]:
-        return self._db.fetch_all(
-            """
-            SELECT instrument_name, symbol, score, is_anchor,
-                   quote_volume_24h, funding_rate, updated_at_ms
-            FROM active_universe
-            ORDER BY score DESC
-            """,
-        )
-
-    def add_history(self, rows: Sequence[dict], refreshed_at_ms: int) -> None:
-        for row in rows:
+    def append_history(self, candidates: Sequence, now_ms: int) -> None:
+        for c in candidates:
             self._db.execute(
                 """
                 INSERT INTO universe_history (
-                    refreshed_at_ms, instrument_name, symbol,
-                    included, is_anchor, score,
-                    quote_volume_24h, funding_rate, reason
+                    refreshed_at_ms, symbol_name, score, funding_rate,
+                    quote_volume_24h, is_anchor, selected, payload,
+                    created_at_ms
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    refreshed_at_ms,
-                    row["instrument_name"],
-                    row["symbol"],
-                    int(row.get("included", False)),
-                    int(row.get("is_anchor", False)),
-                    row.get("score"),
-                    row.get("quote_volume_24h"),
-                    row.get("funding_rate"),
-                    row.get("reason"),
+                    now_ms,
+                    c.name,
+                    str(c.score),
+                    str(c.funding_rate),
+                    str(c.quote_volume_24h),
+                    int(c.is_anchor),
+                    int(c.selected),
+                    to_json(asdict(c)),
+                    utc_now_ms(),
                 ),
             )
