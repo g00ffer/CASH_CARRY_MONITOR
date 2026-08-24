@@ -44,6 +44,7 @@ from .app import (
     YieldParams,
 )
 
+from monitor.universe import UniverseSelectorParams
 
 # ---------------------------------------------------------------------
 # Config -> domain mappers
@@ -175,6 +176,23 @@ def _yield_params_from_settings(settings: Settings) -> YieldParams:
         yield_base=YieldBase(settings.yield_model.yield_base),
     )
 
+def _universe_params_from_settings(settings: Settings) -> UniverseSelectorParams:
+    u = settings.universe
+    return UniverseSelectorParams(
+        exchange_id=settings.exchange.id,
+        refresh_interval_hours=u.refresh_interval_hours,
+        max_active_symbols=u.max_active_symbols,
+        min_funding_rate_per_interval=pct_to_decimal(
+            u.min_predicted_funding_pct_per_interval,
+        ),
+        min_quote_volume_24h=to_decimal(u.min_quote_volume_24h),
+        max_spread=bps_to_decimal(u.max_spread_bps),
+        always_include=tuple(u.always_include),
+        weight_funding=u.score_weights.funding,
+        weight_liquidity=u.score_weights.liquidity,
+        candidate_universe_size=u.candidate_universe_size,
+        default_notional_usd=to_decimal(u.default_notional_usd),
+    )
 
 # ---------------------------------------------------------------------
 # Exchange client factory

@@ -163,3 +163,4 @@ universe:
     funding: 0.70
     liquidity: 0.30
   candidate_universe_size: 100
+  default_notional_usd: 5000

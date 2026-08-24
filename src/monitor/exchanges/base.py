@@ -90,3 +90,10 @@ class ExchangeClient(ABC):
         raise NotImplementedError(
             "fetch_all_perp_tickers is not implemented by this client",
         )
+
+    @abstractmethod
+    async def fetch_all_perp_tickers(self) -> list[PerpTicker]:
+        """
+        Fetch all linear perpetual tickers in one request.
+        Used by universe selector for liquidity/volume screening.
+        """        

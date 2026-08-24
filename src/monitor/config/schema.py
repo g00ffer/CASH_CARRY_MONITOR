@@ -267,6 +267,34 @@ class StorageSettings(StrictModel):
     save_snapshots: bool = True
     save_alerts: bool = True
 
+# ---------------------------------------------------------------------
+# Universe selector (dynamic pool) — Stage 1+
+# ---------------------------------------------------------------------
+class UniverseScoreWeights(StrictModel):
+    funding: float = Field(default=0.70, ge=0, le=1)
+    liquidity: float = Field(default=0.30, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _validate_weights(self) -> "UniverseScoreWeights":
+        if abs(self.funding + self.liquidity - 1.0) > 1e-9:
+            raise ValueError(
+                "universe.score_weights.funding + liquidity must equal 1.0"
+            )
+        return self
+
+
+class UniverseSettings(StrictModel):
+    enabled: bool = False
+    refresh_interval_hours: int = Field(default=8, gt=0)
+    max_active_symbols: int = Field(default=12, gt=0)
+    min_predicted_funding_pct_per_interval: float = Field(default=0.03, ge=0)
+    min_quote_volume_24h: float = Field(default=5_000_000, ge=0)
+    min_open_interest_usd: Optional[float] = Field(default=None, ge=0)
+    max_spread_bps: float = Field(default=15.0, ge=0)
+    always_include: List[str] = Field(default_factory=list)
+    score_weights: UniverseScoreWeights = Field(default_factory=UniverseScoreWeights)
+    candidate_universe_size: int = Field(default=100, gt=0)
+    default_notional_usd: float = Field(default=5000, gt=0)
 
 # ---------------------------------------------------------------------
 # Symbol
