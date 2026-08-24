@@ -20,7 +20,7 @@ from .snapshot_repository import SnapshotRepository
 
 from .universe_repository import UniverseRepository
 # и в __all__:
-"UniverseRepository",
+
 
 __all__ = [
     # alert repository
@@ -43,4 +43,5 @@ __all__ = [
 
     # snapshot repository
     "SnapshotRepository",
+    "UniverseRepository",
 ]

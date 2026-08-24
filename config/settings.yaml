@@ -140,7 +140,7 @@ storage:
   mode: sqlite
   sqlite_path: data/monitor.sqlite
   save_raw_responses: true
-  retention_days: 90
+  retention_days: 30
   save_snapshots: true
   save_alerts: true
 
