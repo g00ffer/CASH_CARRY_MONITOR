@@ -164,6 +164,50 @@ class SignalSettings(StrictModel):
     suppress_minutes_before_funding: int = Field(default=10, ge=0)
     suppress_minutes_after_funding: int = Field(default=10, ge=0)
 
+    # --- Funding stability protection (Stage 1+, off by default) ---
+    funding_safety_multiplier: float = Field(default=1.0, ge=0)
+    funding_lookback_minutes: int = Field(default=20, gt=0)
+    require_stable_average: bool = False
+    min_stable_confirmations: int = Field(default=0, ge=0)
+    block_entry_if_dropping_fast: bool = False
+    max_funding_drop_pct: float = Field(default=35.0, ge=0, le=100)
+    exit_funding_threshold_pct: float = Field(default=0.008, ge=0)
+    exit_minutes_before_funding: int = Field(default=0, ge=0)
+
+
+# ---------------------------------------------------------------------
+# Universe selector (dynamic pool) — Stage 1+
+# ---------------------------------------------------------------------
+class UniverseScoreWeights(StrictModel):
+    funding: float = Field(default=0.70, ge=0, le=1)
+    liquidity: float = Field(default=0.30, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _validate_weights(self) -> "UniverseScoreWeights":
+        if abs(self.funding + self.liquidity - 1.0) > 1e-9:
+            raise ValueError(
+                "universe.score_weights: funding + liquidity must equal 1.0"
+            )
+        return self
+
+
+class UniverseSettings(StrictModel):
+    """
+    Dynamic instrument pool (Universe Refresh).
+    Disabled by default: static symbols.yaml remains authoritative.
+    """
+    enabled: bool = False
+    refresh_interval_hours: int = Field(default=8, gt=0)
+    max_active_symbols: int = Field(default=12, gt=0)
+    min_predicted_funding_pct_per_interval: float = Field(default=0.03, ge=0)
+    min_quote_volume_24h: float = Field(default=5_000_000, ge=0)
+    min_open_interest_usd: Optional[float] = Field(default=None, ge=0)
+    max_spread_bps: float = Field(default=15.0, ge=0)
+    always_include: List[str] = Field(default_factory=list)
+    score_weights: UniverseScoreWeights = Field(
+        default_factory=UniverseScoreWeights,
+    )
+    candidate_universe_size: int = Field(default=100, gt=0)
 
 # ---------------------------------------------------------------------
 # Telegram
@@ -296,6 +340,7 @@ class Settings(StrictModel):
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     symbols: List[SymbolConfig] = Field(default_factory=list)
+    universe: UniverseSettings = Field(default_factory=UniverseSettings)
 
     @model_validator(mode="after")
     def _validate_settings(self) -> Settings:

@@ -98,6 +98,16 @@ signals:
   suppress_minutes_before_funding: 10
   suppress_minutes_after_funding: 10
 
+  # Funding stability protection (выключено => Stage 1 без изменений)
+  funding_safety_multiplier: 1.0
+  funding_lookback_minutes: 20
+  require_stable_average: false
+  min_stable_confirmations: 0
+  block_entry_if_dropping_fast: false
+  max_funding_drop_pct: 35.0
+  exit_funding_threshold_pct: 0.008
+  exit_minutes_before_funding: 0
+
 # ---------------------------------------------------------------------
 # Telegram
 # ---------------------------------------------------------------------
@@ -133,3 +143,23 @@ storage:
   retention_days: 90
   save_snapshots: true
   save_alerts: true
+
+# ---------------------------------------------------------------------
+# Universe selector (dynamic pool) — Stage 1+
+# enabled: false => статичный symbols.yaml, поведение не меняется
+# ---------------------------------------------------------------------
+universe:
+  enabled: false
+  refresh_interval_hours: 8
+  max_active_symbols: 12
+  min_predicted_funding_pct_per_interval: 0.03
+  min_quote_volume_24h: 5000000
+  # min_open_interest_usd: 3000000
+  max_spread_bps: 15
+  always_include:
+    - BTC_CARRY
+    - ETH_CARRY
+  score_weights:
+    funding: 0.70
+    liquidity: 0.30
+  candidate_universe_size: 100
