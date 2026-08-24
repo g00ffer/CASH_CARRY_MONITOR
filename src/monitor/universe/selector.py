@@ -1,146 +1,120 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from decimal import Decimal
 
-from monitor.domain import PerpTicker
 from monitor.utils import ZERO
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class UniverseParams:
-    """Пороги отбора пула (все rate/spread — decimal fractions)."""
+class UniverseCandidate:
+    """One candidate instrument with the metrics needed for selection."""
+    symbol_name: str
+    base: str
+    quote: str
+    perp_symbol: str
+    predicted_funding_rate: Decimal   # decimal per funding interval
+    quote_volume_24h: Decimal
+    open_interest: Decimal | None = None
+    spread: Decimal = ZERO            # decimal fraction
 
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class UniverseSelectorParams:
     max_active_symbols: int
-    min_funding_rate: Decimal
+    min_predicted_funding: Decimal      # decimal per interval
     min_quote_volume_24h: Decimal
-    min_open_interest_usd: Decimal | None
-    max_spread: Decimal
-    always_include: tuple[str, ...]      # имена, напр. BTC_CARRY
-    weight_funding: Decimal
-    weight_liquidity: Decimal
-    candidate_universe_size: int
+    min_open_interest: Decimal | None   # None = не проверяем
+    max_spread: Decimal                 # decimal fraction
+    always_include: tuple[str, ...]
+    weight_funding: float
+    weight_liquidity: float
 
     def __post_init__(self) -> None:
         if self.max_active_symbols < 1:
             raise ValueError("max_active_symbols must be >= 1")
-        if self.candidate_universe_size < self.max_active_symbols:
-            raise ValueError(
-                "candidate_universe_size must be >= max_active_symbols"
-            )
-        if self.weight_funding + self.weight_liquidity <= ZERO:
+        if self.weight_funding + self.weight_liquidity <= 0:
             raise ValueError("score weights sum must be > 0")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class UniverseCandidate:
-    name: str
-    base: str
-    quote: str
-    spot_symbol: str
-    perp_symbol: str
-    funding_rate: Decimal
-    funding_interval_hours: Decimal
-    quote_volume_24h: Decimal
-    open_interest: Decimal | None
-    spread: Decimal
-    score: Decimal
-    is_anchor: bool
-    selected: bool
+class UniverseSelectionResult:
+    selected: tuple[str, ...]
+    scores: dict[str, float]
+    excluded: dict[str, str]
 
 
-def split_perp_symbol(symbol: str) -> tuple[str, str] | None:
-    """BTC/USDT:USDT -> (BTC, USDT)."""
-    if ":" not in symbol:
-        return None
-    pair, _settle = symbol.split(":", 1)
-    if "/" not in pair:
-        return None
-    base, quote = pair.split("/", 1)
-    return base, quote
-
-
-def candidate_spread(ticker: PerpTicker) -> Decimal | None:
-    """Spread как decimal fraction: spread_abs / mid."""
-    if ticker.mid_price <= ZERO:
-        return None
-    return ticker.spread_abs / ticker.mid_price
-
-
-def filter_liquid_candidates(
-    tickers: list[PerpTicker],
-    params: UniverseParams,
-) -> list[tuple[PerpTicker, Decimal]]:
-    """(ticker, spread) прошедшие фильтры ликвидности, sort by volume desc."""
-    out: list[tuple[PerpTicker, Decimal]] = []
-    for ticker in tickers:
-        if split_perp_symbol(ticker.symbol) is None:
-            continue
-        if ticker.quote_volume_24h is None:
-            continue
-        if ticker.quote_volume_24h < params.min_quote_volume_24h:
-            continue
-        if (
-            params.min_open_interest_usd is not None
-            and (
-                ticker.open_interest is None
-                or ticker.open_interest < params.min_open_interest_usd
-            )
-        ):
-            continue
-        spread = candidate_spread(ticker)
-        if spread is None or spread > params.max_spread:
-            continue
-        out.append((ticker, spread))
-    out.sort(key=lambda item: item[0].quote_volume_24h, reverse=True)
-    return out
-
-
-def score_candidates(
-    candidates: list[UniverseCandidate],
-    params: UniverseParams,
-) -> list[UniverseCandidate]:
-    """score = (w_f * norm(funding) + w_l * norm(volume)) / (w_f + w_l)."""
-    if not candidates:
-        return []
-    max_funding = max((c.funding_rate for c in candidates), default=ZERO)
-    max_volume = max((c.quote_volume_24h for c in candidates), default=ZERO)
-    weight_sum = params.weight_funding + params.weight_liquidity
-    scored: list[UniverseCandidate] = []
-    for c in candidates:
-        funding_norm = (
-            c.funding_rate / max_funding if max_funding > ZERO else ZERO
-        )
-        volume_norm = (
-            c.quote_volume_24h / max_volume if max_volume > ZERO else ZERO
-        )
-        score = (
-            params.weight_funding * funding_norm
-            + params.weight_liquidity * volume_norm
-        ) / weight_sum
-        scored.append(replace(c, score=score))
-    scored.sort(key=lambda c: c.score, reverse=True)
-    return scored
+def _normalize(value: Decimal, max_value: Decimal) -> float:
+    if max_value <= ZERO:
+        return 0.0
+    return float(min(value, max_value) / max_value)
 
 
 def select_universe(
     candidates: list[UniverseCandidate],
-    params: UniverseParams,
-) -> list[UniverseCandidate]:
-    """Топ-N по score + якоря всегда в пуле. Возвращает ВСЕх с флагом selected."""
-    scored = score_candidates(candidates, params)
-    selected_names: set[str] = set()
-    for c in scored:
-        if c.is_anchor:
-            selected_names.add(c.name)
-    remaining = max(0, params.max_active_symbols - len(selected_names))
-    for c in scored:
-        if remaining <= 0:
-            break
-        if c.name in selected_names:
+    params: UniverseSelectorParams,
+) -> UniverseSelectionResult:
+    """
+    Filter candidates, score the rest (funding + liquidity),
+    take top-N, then force-include anchors.
+    """
+    excluded: dict[str, str] = {}
+    eligible: list[UniverseCandidate] = []
+
+    for c in candidates:
+        if c.spread > params.max_spread:
+            excluded[c.symbol_name] = "spread_too_wide"
             continue
-        selected_names.add(c.name)
-        remaining -= 1
-    return [
-        replace(c, selected=c.name in selected_names) for c in scored
-    ]
+        if c.quote_volume_24h < params.min_quote_volume_24h:
+            excluded[c.symbol_name] = "low_liquidity"
+            continue
+        if (
+            params.min_open_interest is not None
+            and (c.open_interest is None
+                 or c.open_interest < params.min_open_interest)
+        ):
+            excluded[c.symbol_name] = "low_open_interest"
+            continue
+        if c.predicted_funding_rate < params.min_predicted_funding:
+            excluded[c.symbol_name] = "funding_below_minimum"
+            continue
+        eligible.append(c)
+
+    max_funding = max(
+        (c.predicted_funding_rate for c in eligible), default=ZERO,
+    )
+    max_volume = max(
+        (c.quote_volume_24h for c in eligible), default=ZERO,
+    )
+
+    scores: dict[str, float] = {}
+    for c in eligible:
+        f_norm = _normalize(c.predicted_funding_rate, max_funding)
+        v_norm = _normalize(c.quote_volume_24h, max_volume)
+        scores[c.symbol_name] = (
+            params.weight_funding * f_norm
+            + params.weight_liquidity * v_norm
+        )
+
+    ranked = sorted(
+        eligible, key=lambda c: scores[c.symbol_name], reverse=True,
+    )
+    selected: list[str] = []
+    for c in ranked:
+        if len(selected) >= params.max_active_symbols:
+            excluded.setdefault(c.symbol_name, "not_in_top_n")
+            break
+        selected.append(c.symbol_name)
+
+    # Якоря всегда присутствуют (если кандидата вообще нет — игнорируем)
+    by_name = {c.symbol_name: c for c in candidates}
+    for name in params.always_include:
+        if name in by_name and name not in selected:
+            selected.append(name)
+            excluded.pop(name, None)
+
+    return UniverseSelectionResult(
+        selected=tuple(selected),
+        scores=scores,
+        excluded=excluded,
+    )
