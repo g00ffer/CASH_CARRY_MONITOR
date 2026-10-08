@@ -22,3 +22,8 @@ paper_trade_report_v2.txt
 data/
 *.sqlite
 *.sqlite-journal
+__pycache__/
+*.pyc
+*.swp
+*.sqlite
+*.gz
